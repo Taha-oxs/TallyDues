@@ -1,0 +1,35 @@
+# Signing certificates and private keys
+*.pfx
+*.p12
+*.pem
+*.key
+*.snk
+.env
+.env.*
+
+# Retired license system: never commit these
+LicenseCommon.ps1
+Stamp-For-Customer.ps1
+dev-tools/
+*.lic
+Orders/
+
+# Run-time files: can hold customer names and amounts
+*.log
+pending/
+snooze.json
+last-toast.txt
+expiry.txt
+notify-mode.txt
+state.dat
+*.dmp
+
+# Build output
+Output/
+bin/
+obj/
+*.exe
+*.zip
+
+# Local settings
+.claude/settings.local.json

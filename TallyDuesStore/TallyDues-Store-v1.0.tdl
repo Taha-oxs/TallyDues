@@ -1,0 +1,634 @@
+;;; =============================================================
+;;; TallyDues (licensed edition) v1.0
+;;; Developed by OpenXpert Solutions
+;;; TallyPrime add-on: Windows notifications for cheques/PDCs and
+;;; invoices that are due, plus an on-screen Dashboard and Settings.
+;;;
+;;; Installed by TallyDues-Store-Setup.exe, which writes the correct
+;;; script path, currency, alert timeframe and license end date into this file.
+;;; Load it in TallyPrime: F1 Help > TDL and Add-On > F4 Manage Local
+;;; TDLs > Load on startup Yes > pick this file > Ctrl+A. Restart Tally.
+;;;
+;;; Menu: TallyDues Run Check, TallyDues Dashboard and TallyDues Settings are
+;;; on the Gateway of Tally menu.
+;;; The license is enforced outside this file, in two layers: TDV2Toast.vbs (license end
+;;; date from expiry.txt vs the Windows clock) and notify.ps1 (signed license.lic check
+;;; for every alert). This file does no date maths and no expiry test.
+;;; =============================================================
+
+[System: Formula]
+   TDV2Script : "C:\ProgramData\TallyDues\TDV2Toast.vbs"
+   TDV2DefChqBack : 7
+   TDV2DefChqAhead : 7
+   TDV2DefInvBack : 7
+   TDV2DefInvAhead : 7
+   TDV2ScopeRev : 1
+   TDV2Cur : " "
+   TDV2ExpiryNum : 20000101
+   TDV2ExpiryDate : "01-Jan-2000"
+   TDV2ExpiryNote : "Your TallyDues license has expired. Please renew your subscription to keep receiving notifications."
+
+[System: Formula]
+   TDV2IsSales : ($VoucherTypeName = "Sales") AND (NOT $IsCancelled) AND (NOT $IsOptional)
+   ;; Intentional design: matches every
+   ;; non-Sales voucher type (Payment/Journal/Contra/Receipt/...),
+   ;; not Receipt only.
+   TDV2IsReceipt : (NOT ($VoucherTypeName = "Sales")) AND (NOT $IsCancelled) AND (NOT $IsOptional)
+
+[Variable: TDV2ChqBack]
+   Type : Number
+   Persistent : Yes
+   Default : 7
+
+[Variable: TDV2ChqAhead]
+   Type : Number
+   Persistent : Yes
+   Default : 7
+
+[Variable: TDV2InvBack]
+   Type : Number
+   Persistent : Yes
+   Default : 7
+
+[Variable: TDV2InvAhead]
+   Type : Number
+   Persistent : Yes
+   Default : 7
+
+[Variable: TDV2ScopeSeen]
+   Type : Number
+   Persistent : Yes
+   Default : 0
+
+;;; Each install/re-stamp writes a new TDV2ScopeRev plus the timeframe the
+;;; user chose in Setup (TDV2Def...). The first time Tally runs after that,
+;;; TDV2SyncScope copies those choices into the persistent variables. After
+;;; that the user can change them any time in Gateway > TallyDues Settings.
+[Function: TDV2SyncScope]
+   010 : If : @@TDV2ScopeRev <> ##TDV2ScopeSeen
+   020 : Set : TDV2ChqBack : @@TDV2DefChqBack
+   030 : Set : TDV2ChqAhead : @@TDV2DefChqAhead
+   040 : Set : TDV2InvBack : @@TDV2DefInvBack
+   050 : Set : TDV2InvAhead : @@TDV2DefInvAhead
+   060 : Set : TDV2ScopeSeen : @@TDV2ScopeRev
+   070 : End If
+
+[Collection: TDV2SalesBase]
+   Type : Voucher
+   Fetch : Date, VoucherTypeName, VoucherNumber, PartyLedgerName, Amount, IsCancelled, IsOptional, AllLedgerEntries, AllLedgerEntries.BillAllocations.*
+   Filter : TDV2IsSales
+   Sort : Default : $Date
+
+[Collection: TDV2SalesBills]
+   Source Collection : TDV2SalesBase
+   Walk : AllLedgerEntries, BillAllocations
+   Fetch : Name, Amount
+
+[Collection: TDV2ReceiptBase]
+   Type : Voucher
+   Fetch : Date, VoucherTypeName, VoucherNumber, PartyLedgerName, Amount, IsCancelled, IsOptional, AllLedgerEntries, AllLedgerEntries.BankAllocations.*
+   Filter : TDV2IsReceipt
+
+[Collection: TDV2BankAll]
+   Source Collection : TDV2ReceiptBase
+   Walk : AllLedgerEntries, BankAllocations
+   Fetch : TransactionType, InstrumentNumber, InstrumentDate, LedgerName, Amount
+
+[System: Formula]
+   TDV2SalesBaseN : $$NumItems:TDV2SalesBase
+   TDV2SalesBillsN : $$NumItems:TDV2SalesBills
+   TDV2ReceiptBaseN : $$NumItems:TDV2ReceiptBase
+   TDV2BankAllN : $$NumItems:TDV2BankAll
+
+[Function: TDV2RunCheck]
+   Variable : TDV2PD : String : ""
+   Variable : TDV2IV : String : ""
+   Variable : TDV2Cmd : String : ""
+   Variable : TDV2N : Number : 0
+   Variable : TDV2M : Number : 0
+   Variable : TDV2X : Number : 0
+   180 : If : $$NumItems:TDV2BankAll > 0
+   190 : Walk Collection : TDV2BankAll
+   200 : If : ($InstrumentDate >= ##SVCurrentDate - ##TDV2ChqBack) AND ($InstrumentDate <= ##SVCurrentDate + ##TDV2ChqAhead)
+   210 : Set : TDV2N : ##TDV2N + 1
+   220 : If : ##TDV2N <= 5
+   230 : If : ##TDV2N > 1
+   240 : Set : TDV2PD : ##TDV2PD + " | "
+   250 : End If
+   300 : Set : TDV2PD : ##TDV2PD + "Chq " + $$String:$InstrumentNumber + " " + $LedgerName + " " + @@TDV2Cur + $$String:$Amount + " matures " + $$String:$InstrumentDate
+   310 : End If
+   320 : End If
+   330 : End Walk
+   340 : If : ##TDV2N > 0
+   350 : If : ##TDV2N > 5
+   360 : Set : TDV2X : ##TDV2N - 5
+   370 : Set : TDV2PD : ##TDV2PD + " | (+" + $$String:##TDV2X + " more)"
+   380 : End If
+   390 : Set : TDV2Cmd : "//B //Nologo " + @@TDV2Script + " TallyDues pdc " + ##SVCurrentCompany + " " + $$String:##TDV2N + " maturing: " + ##TDV2PD
+   400 : Browse URL : "wscript.exe" : ##TDV2Cmd : Yes
+   410 : End If
+   420 : End If
+   430 : If : $$NumItems:TDV2SalesBase > 0
+   440 : Walk Collection : TDV2SalesBase
+   450 : If : ($Date >= ##SVCurrentDate - ##TDV2InvBack) AND ($Date <= ##SVCurrentDate + ##TDV2InvAhead)
+   460 : Set : TDV2M : ##TDV2M + 1
+   470 : If : ##TDV2M <= 5
+   480 : If : ##TDV2M > 1
+   490 : Set : TDV2IV : ##TDV2IV + " | "
+   500 : End If
+   550 : Set : TDV2IV : ##TDV2IV + $VoucherNumber + " " + $PartyLedgerName + " " + @@TDV2Cur + $$String:$Amount + " dated " + $$String:$Date
+   560 : End If
+   570 : End If
+   580 : End Walk
+   590 : If : ##TDV2M > 0
+   600 : If : ##TDV2M > 5
+   610 : Set : TDV2X : ##TDV2M - 5
+   620 : Set : TDV2IV : ##TDV2IV + " | (+" + $$String:##TDV2X + " more)"
+   630 : End If
+   640 : Set : TDV2Cmd : "//B //Nologo " + @@TDV2Script + " TallyDues invoice " + ##SVCurrentCompany + " " + $$String:##TDV2M + " due: " + ##TDV2IV
+   650 : Browse URL : "wscript.exe" : ##TDV2Cmd : Yes
+   660 : End If
+   670 : End If
+   685 : If : ##TDV2N = 0
+   686 : If : ##TDV2M = 0
+   690 : Set : TDV2Cmd : "//B //Nologo " + @@TDV2Script + " TallyDues general Nothing to report: nothing falls in your alert timeframe (cheques " + $$String:##TDV2ChqBack + " days back / " + $$String:##TDV2ChqAhead + " ahead, invoices " + $$String:##TDV2InvBack + " days back / " + $$String:##TDV2InvAhead + " ahead, counted from the current date in Tally). TallyDues is working - there is simply nothing due. Change the timeframe in Gateway of Tally > TallyDues Settings."
+   700 : Browse URL : "wscript.exe" : ##TDV2Cmd : Yes
+   705 : End If
+   706 : End If
+
+[System: Events]
+   TDV2WelcomeEvt : System Start : TRUE : Call : TDV2WelcomeFn
+
+[Function: TDV2WelcomeFn]
+   Variable : TDV2WMsg : String : ""
+   010 : Set : TDV2WMsg : "//B //Nologo " + @@TDV2Script + " TallyDues general Welcome to TallyDues! Your license is valid until " + @@TDV2ExpiryDate + ". Use the TallyDues items on the Gateway of Tally menu: Run Check to see what is due, Dashboard for the full lists, Settings to change the alert timeframe."
+   020 : Browse URL : "wscript.exe" : ##TDV2WMsg : Yes
+   030 : Call : TDV2SyncScope
+
+[System: Variable]
+   TDV2ChqBack : 7
+   TDV2ChqAhead : 7
+   TDV2InvBack : 7
+   TDV2InvAhead : 7
+   TDV2ScopeSeen : 0
+
+[System: Formula]
+   TDV2ChqInWin : ($InstrumentDate >= ##SVCurrentDate - ##TDV2ChqBack) AND ($InstrumentDate <= ##SVCurrentDate + ##TDV2ChqAhead)
+   TDV2InvInWin : ($Date >= ##SVCurrentDate - ##TDV2InvBack) AND ($Date <= ##SVCurrentDate + ##TDV2InvAhead)
+   TDV2DueChqN : $$NumItems:TDV2ChqList
+   TDV2DueInvN : $$NumItems:TDV2InvList
+
+[Collection: TDV2ChqList]
+   Source Collection : TDV2ReceiptBase
+   Walk : AllLedgerEntries, BankAllocations
+   Compute : TDV2CParty : $PartyLedgerName
+   Compute : TDV2CVNo : $VoucherNumber
+   Fetch : InstrumentNumber, InstrumentDate, Amount
+   Filter : TDV2ChqInWin
+   Sort : Default : $InstrumentDate
+
+[Collection: TDV2InvList]
+   Source Collection : TDV2SalesBase
+   Filter : TDV2InvInWin
+   Sort : Default : $Date
+
+[Report: TDV2Dashboard]
+   Use : DSP Template
+   Title : "TallyDues Dashboard - what is due"
+   Form : TDV2DashForm
+
+[Form: TDV2DashForm]
+   Use : DSP Template
+   Parts : TDV2DashPart, TDV2DashChqPart, TDV2DashInvPart
+   Bottom Parts : TDV2DashBotPart
+   Width : 95% Page
+   Height : 85% Page
+
+[Part: TDV2DashPart]
+   Lines : TDV2DL0, TDV2DL1, TDV2DBl1
+
+;;; List parts scroll vertically (Scroll + Height); the blank/footer lines are
+;;; pinned with Bottom Line. Repeat stays on the Part, not the Line.
+[Part: TDV2DashChqPart]
+   Lines : TDV2DChqH, TDV2DChqCols, TDV2DChqRow, TDV2DChqNone
+   Bottom Line : TDV2DBl2
+   Repeat : TDV2DChqRow : TDV2ChqList
+   Scroll : Vertical
+   Height : 25% Page
+
+[Part: TDV2DashInvPart]
+   Lines : TDV2DInvH, TDV2DInvCols, TDV2DInvRow, TDV2DInvNone
+   Bottom Line : TDV2DBl3
+   Repeat : TDV2DInvRow : TDV2InvList
+   Scroll : Vertical
+   Height : 33% Page
+
+;;; SNOOZED REMINDERS data: C:\ProgramData\TallyDues\snooze.json is written by
+;;; TallyDuesProtocol.ps1 when a Snooze button is clicked; expired entries are
+;;; removed there (this file does no date maths).
+[Collection: TDV2SnoozeFile]
+   Data Source : File JSON : "C:\ProgramData\TallyDues\snooze.json"
+   JSON Object Path : "Snoozes:1"
+
+[System: Formula]
+   TDV2SnzN : $$NumItems:TDV2SnoozeFile
+
+[Line: TDV2DSnzH]
+   Fields : TDV2DSnzHF
+
+[Field: TDV2DSnzHF]
+   Use : Name Field
+   Set as : "SNOOZED REMINDERS  (" + $$String:@@TDV2SnzN + ")"
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DSnzRow]
+   Fields : TDV2DSz1, TDV2DSz2, TDV2DSz3, TDV2DSz4
+
+[Field: TDV2DSz1]
+   Use : Name Field
+   Set as : $Kind
+   Width : 11
+   Skip : No
+
+[Field: TDV2DSz2]
+   Use : Name Field
+   Set as : $SnzCount + " item(s)"
+   Width : 14
+   Skip : Yes
+
+[Field: TDV2DSz3]
+   Use : Name Field
+   Set as : $Label
+   Width : 20
+   Skip : Yes
+
+[Field: TDV2DSz4]
+   Use : Name Field
+   Set as : "until " + $Until
+   Width : 18
+   Skip : Yes
+
+[Line: TDV2DSnzNone]
+   Fields : TDV2DSnzNF
+   Invisible : @@TDV2SnzN > 0
+
+[Field: TDV2DSnzNF]
+   Use : Name Field
+   Set as : "Nothing snoozed. Use Snooze 1 day / 3 days on a notification."
+   Width : 100% Page
+   Skip : Yes
+;;; Bottom block of the Dashboard: snoozed reminders first, then the
+;;; "Esc closes this screen" lines pinned underneath. Listed in the Form's
+;;; Bottom Parts so it stays at the bottom of the screen.
+[Part: TDV2DashBotPart]
+   Lines : TDV2DSnzH, TDV2DSnzRow, TDV2DSnzNone
+   Bottom Line : TDV2DEng, TDV2DFoot
+   Repeat : TDV2DSnzRow : TDV2SnoozeFile
+   Scroll : Vertical
+   Height : 14% Page
+
+[Line: TDV2DL0]
+   Fields : TDV2DF0
+
+[Field: TDV2DF0]
+   Use : Name Field
+   Set as : "Tally date: " + $$String:##SVCurrentDate + "   |   Cheques: " + $$String:##TDV2ChqBack + " days back, " + $$String:##TDV2ChqAhead + " days ahead   |   Invoices: " + $$String:##TDV2InvBack + " days back, " + $$String:##TDV2InvAhead + " days ahead"
+   Width : 100% Page
+   Word Wrap : Yes
+   Skip : Yes
+
+[Line: TDV2DL1]
+   Fields : TDV2DF1
+
+[Field: TDV2DF1]
+   Use : Name Field
+   Set as : "Due in your timeframe:  " + $$String:@@TDV2DueChqN + " cheque(s) / PDC,  " + $$String:@@TDV2DueInvN + " invoice(s).   Change the timeframe: Gateway of Tally > TallyDues Settings"
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DBl1]
+   Fields : TDV2DBf1
+
+[Field: TDV2DBf1]
+   Use : Name Field
+   Set as : ""
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DBl2]
+   Fields : TDV2DBf2
+
+[Field: TDV2DBf2]
+   Use : Name Field
+   Set as : ""
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DBl3]
+   Fields : TDV2DBf3
+
+[Field: TDV2DBf3]
+   Use : Name Field
+   Set as : ""
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DChqH]
+   Fields : TDV2DChqHF
+
+[Field: TDV2DChqHF]
+   Use : Name Field
+   Set as : "CHEQUES / PDC DUE IN YOUR TIMEFRAME  (" + $$String:@@TDV2DueChqN + ")"
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DChqCols]
+   Fields : TDV2DCC1, TDV2DCC2, TDV2DCC3, TDV2DCC4
+
+[Field: TDV2DCC1]
+   Use : Name Field
+   Set as : "Cheque no."
+   Width : 16
+   Skip : Yes
+
+[Field: TDV2DCC2]
+   Use : Name Field
+   Set as : "Customer"
+   Width : 36
+   Skip : Yes
+
+[Field: TDV2DCC3]
+   Use : Name Field
+   Set as : "Amount"
+   Width : 18
+   Skip : Yes
+
+[Field: TDV2DCC4]
+   Use : Name Field
+   Set as : "Cheque date"
+   Width : 16
+   Skip : Yes
+
+[Line: TDV2DChqRow]
+   Fields : TDV2DR1, TDV2DR2, TDV2DR3, TDV2DR4
+
+[Field: TDV2DR1]
+   Use : Name Field
+   Set as : $$String:$InstrumentNumber
+   Width : 16
+   Skip : No
+
+[Field: TDV2DR2]
+   Use : Name Field
+   Set as : $TDV2CParty
+   Width : 36
+   Word Wrap : Yes
+   Skip : Yes
+
+[Field: TDV2DR3]
+   Use : Name Field
+   Set as : $$String:$Amount
+   Width : 18
+   Skip : Yes
+
+[Field: TDV2DR4]
+   Use : Name Field
+   Set as : $$String:$InstrumentDate
+   Width : 16
+   Skip : Yes
+
+[Line: TDV2DChqNone]
+   Fields : TDV2DChqNF
+   Invisible : @@TDV2DueChqN > 0
+
+[Field: TDV2DChqNF]
+   Use : Name Field
+   Set as : "NO DUES: no cheques / PDC fall in the period you set (" + $$String:##TDV2ChqBack + " days back to " + $$String:##TDV2ChqAhead + " days ahead of Tally date)."
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DInvH]
+   Fields : TDV2DInvHF
+
+[Field: TDV2DInvHF]
+   Use : Name Field
+   Set as : "INVOICES DUE IN YOUR TIMEFRAME  (" + $$String:@@TDV2DueInvN + ")"
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DInvCols]
+   Fields : TDV2DIC1, TDV2DIC2, TDV2DIC3, TDV2DIC4
+
+[Field: TDV2DIC1]
+   Use : Name Field
+   Set as : "Invoice no."
+   Width : 16
+   Skip : Yes
+
+[Field: TDV2DIC2]
+   Use : Name Field
+   Set as : "Customer"
+   Width : 36
+   Skip : Yes
+
+[Field: TDV2DIC3]
+   Use : Name Field
+   Set as : "Amount"
+   Width : 18
+   Skip : Yes
+
+[Field: TDV2DIC4]
+   Use : Name Field
+   Set as : "Invoice date"
+   Width : 16
+   Skip : Yes
+
+[Line: TDV2DInvRow]
+   Fields : TDV2DV1, TDV2DV2, TDV2DV3, TDV2DV4
+
+[Field: TDV2DV1]
+   Use : Name Field
+   Set as : $$String:$VoucherNumber
+   Width : 16
+   Skip : No
+
+[Field: TDV2DV2]
+   Use : Name Field
+   Set as : $PartyLedgerName
+   Width : 36
+   Word Wrap : Yes
+   Skip : Yes
+
+[Field: TDV2DV3]
+   Use : Name Field
+   Set as : $$String:$Amount
+   Width : 18
+   Skip : Yes
+
+[Field: TDV2DV4]
+   Use : Name Field
+   Set as : $$String:$Date
+   Width : 16
+   Skip : Yes
+
+[Line: TDV2DInvNone]
+   Fields : TDV2DInvNF
+   Invisible : @@TDV2DueInvN > 0
+
+[Field: TDV2DInvNF]
+   Use : Name Field
+   Set as : "NO DUES: no invoices fall in the period you set (" + $$String:##TDV2InvBack + " days back to " + $$String:##TDV2InvAhead + " days ahead of Tally date)."
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DEng]
+   Fields : TDV2DEngF
+
+[Field: TDV2DEngF]
+   Use : Name Field
+   Set as : "Alert script in use: " + @@TDV2Script
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DFoot]
+   Fields : TDV2DFootF
+
+[Field: TDV2DFootF]
+   Use : Name Field
+   Set as : "Esc closes this screen.   License valid until " + @@TDV2ExpiryDate + "   |   Developed by OpenXpert Solutions"
+   Width : 100% Page
+   Skip : Yes
+
+[Report: TDV2Settings]
+   Use : DSP Template
+   Title : "TallyDues Settings - alert timeframe"
+   Form : TDV2SetForm
+
+[Form: TDV2SetForm]
+   Use : DSP Template
+   Parts : TDV2SetPart
+   Width : 75% Page
+   Height : 45% Page
+
+[Part: TDV2SetPart]
+   Lines : TDV2SL0, TDV2SL1, TDV2SL2, TDV2SL3, TDV2SL4, TDV2SL5
+
+[Line: TDV2SL0]
+   Fields : TDV2SH0
+
+[Field: TDV2SH0]
+   Use : Name Field
+   Set as : "How many days around Tally's current date should TallyDues alert you about? (0 to 365)"
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2SL1]
+   Fields : TDV2SA1, TDV2SN1
+
+[Field: TDV2SA1]
+   Use : Name Field
+   Set as : "Cheques already due - days back:"
+   Width : 40
+   Skip : Yes
+
+[Field: TDV2SN1]
+   Use : Number Field
+   Set as : ##TDV2ChqBack
+   Modifies : TDV2ChqBack : Yes
+   Modifiable : Yes
+   Skip : No
+   Width : 10
+   Align : Left
+
+[Line: TDV2SL2]
+   Fields : TDV2SA2, TDV2SN2
+
+[Field: TDV2SA2]
+   Use : Name Field
+   Set as : "Cheques coming up - days ahead:"
+   Width : 40
+   Skip : Yes
+
+[Field: TDV2SN2]
+   Use : Number Field
+   Set as : ##TDV2ChqAhead
+   Modifies : TDV2ChqAhead : Yes
+   Modifiable : Yes
+   Skip : No
+   Width : 10
+   Align : Left
+
+[Line: TDV2SL3]
+   Fields : TDV2SA3, TDV2SN3
+
+[Field: TDV2SA3]
+   Use : Name Field
+   Set as : "Invoices already due - days back:"
+   Width : 40
+   Skip : Yes
+
+[Field: TDV2SN3]
+   Use : Number Field
+   Set as : ##TDV2InvBack
+   Modifies : TDV2InvBack : Yes
+   Modifiable : Yes
+   Skip : No
+   Width : 10
+   Align : Left
+
+[Line: TDV2SL4]
+   Fields : TDV2SA4, TDV2SN4
+
+[Field: TDV2SA4]
+   Use : Name Field
+   Set as : "Invoices coming up - days ahead:"
+   Width : 40
+   Skip : Yes
+
+[Field: TDV2SN4]
+   Use : Number Field
+   Set as : ##TDV2InvAhead
+   Modifies : TDV2InvAhead : Yes
+   Modifiable : Yes
+   Skip : No
+   Width : 10
+   Align : Left
+
+[Line: TDV2SL5]
+   Fields : TDV2SH5
+
+[Field: TDV2SH5]
+   Use : Name Field
+   Set as : "Type a number in a box (the current value is shown). Enter = next box. Ctrl+A = save. Esc = close.   |   Developed by OpenXpert Solutions"
+   Width : 100% Page
+   Skip : Yes
+
+;;; Shortcut keys. Same form as the original TallyDues test file (a [Key]
+;;; block with Action, listed in Add : Keys on the Gateway of Tally menu), but
+;;; with ONE modifier only: TallyPrime did not react to Ctrl+Alt combinations.
+;;; Ctrl+Y, Ctrl+O and Ctrl+S are not used by TallyPrime's own shortcut list.
+;;; The three menu items below always work, with or without the keys.
+[Key: TDV2DashKey]
+   Key : Ctrl + O
+   Action : Display : TDV2Dashboard
+   Title : "TallyDues Dashboard"
+
+[Key: TDV2SetKey]
+   Key : Ctrl + S
+   Action : Modify Variable : TDV2Settings
+   Title : "TallyDues Settings"
+
+[Key: TDV2RunKey]
+   Key : Ctrl + Y
+   Action : Call : TDV2RunCheck
+   Title : "TallyDues Run Check"
+
+[#Menu: Gateway of Tally]
+   Add : Keys : TDV2RunKey, TDV2DashKey, TDV2SetKey
+   Add : Key Item : TallyDues Dashboard : J : Display : TDV2Dashboard
+   Add : Key Item : TallyDues Run Check : Z : Call : TDV2RunCheck
+   Add : Key Item : TallyDues Settings : G : Modify Variable : TDV2Settings
+
+;;; Welcome notification: [System: Events] System Start (every Tally launch).
+;;; ============ END TallyDues v1.0 (licensed) - Developed by OpenXpert Solutions ============

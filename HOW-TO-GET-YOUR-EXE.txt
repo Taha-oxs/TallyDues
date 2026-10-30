@@ -1,0 +1,55 @@
+TallyDues (licensed edition v1.0) - how to build TallyDues-Store-Setup.exe
+Developed by OpenXpert Solutions
+======================================================================
+
+The installer is built from installer-store\TallyDues-Store-Setup.iss with Inno Setup
+(Windows only). The included GitHub Actions workflow does it for you.
+THIS FOLDER IS THE WHOLE REPOSITORY: its contents go at the top level of
+a new GitHub repository.
+
+  .github/workflows/build-store.yml
+  installer-store/      (TallyDues-Store-Setup.iss, next-steps.txt, the three .bmp
+                         images; installer-store/art holds the original .jpg art)
+  TallyDuesStore/       (the add-on and everything Setup installs)
+  HOW-TO-GET-YOUR-EXE.txt, TallyDues-Build-and-Release-Guide.md / .pdf
+
+ 1. Create an empty repository on GitHub (private is fine).
+ 2. Put the CONTENTS of this folder in it, including the hidden .github
+    folder. Either:
+      a) with git:   git init, git add -A, git commit, git remote add
+         origin <repo url>, git push -u origin main   (keeps .github), or
+      b) in the browser: Add file > Upload files and drag in the folders.
+         If the browser skips the hidden .github folder, choose
+         Add file > Create new file, type
+         .github/workflows/build-store.yml as the name and paste in
+         the contents of that file.
+    GitHub does NOT unpack .zip files - unzip this package first.
+ 3. Open the repository's Actions tab. The run "Build TallyDues licensed
+    installer" starts by itself on every push (about 2 minutes). You
+    can also start it by hand: Actions > the workflow > Run workflow.
+ 4. When it shows a green tick open the run and download the artifact
+    "TallyDues-Store-Setup" - it contains
+    TallyDues-Store-Setup.exe. The same .exe goes to every customer, together with THEIR OWN .lic file
+    (see below).
+
+Per customer (done on your own PC, never in the repository)
+ - Use dev-tools\Stamp-For-Customer.ps1 (delivered separately as
+   TallyDues-Store-dev-tools.zip). It makes Orders\<OrderId>_<Customer>.lic.
+   Send the customer the Setup .exe and that .lic. See dev-tools\README.txt
+   and the License Generator Guide.
+ - BEFORE selling: make sure the signing key in LicenseCommon.ps1 is the one
+   you intend to keep (see dev-tools\README.txt), because changing it later
+   invalidates every license already issued. Both copies of LicenseCommon.ps1
+   (TallyDuesStore\Scripts and dev-tools) must be byte-identical.
+
+Notes for publishing
+ - The .exe is not code-signed, so Windows SmartScreen may say "Windows
+   protected your PC" for new downloads: users choose More info > Run
+   anyway. A code-signing certificate removes this warning.
+ - Customers need TallyPrime Release 7+, Windows 10/11 64-bit. No admin
+   rights are needed.
+ - Do not install the Public Beta and this build on the same PC: they share
+   C:\ProgramData\TallyDues.
+
+Fuller version of these instructions, with troubleshooting: TallyDues-Build-and-Release-Guide.pdf / .md
+(in this folder).

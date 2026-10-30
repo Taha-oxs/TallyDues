@@ -1,0 +1,34 @@
+# Builds TallyDues-Store-Setup.exe with Inno Setup on a Windows runner.
+# Starts on every push and can be started by hand (Actions tab > Run workflow).
+# Developed by OpenXpert Solutions
+name: Build TallyDues licensed installer
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Compile the installer with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path -LiteralPath $iscc)) { throw "ISCC.exe not found after installing Inno Setup." }
+          & $iscc "installer-store\TallyDues-Store-Setup.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed (exit code $LASTEXITCODE)." }
+          Get-ChildItem "installer-store\Output" | Format-Table Name, Length
+
+      - name: Publish the Setup program
+        uses: actions/upload-artifact@v4
+        with:
+          name: TallyDues-Store-Setup
+          path: installer-store/Output/TallyDues-Store-Setup.exe
+          if-no-files-found: error
