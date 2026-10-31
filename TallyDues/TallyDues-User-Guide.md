@@ -28,10 +28,10 @@ TallyDues watches your TallyPrime data and shows Windows notifications for chequ
 ## 1. Install
 
 1. Run `TallyDues-Setup.exe` and click Next.
-2. On the **License key** page enter your key, for example `A1B2-C3D4-E5F6-0718-9A0B-1C2D-3E4F-5061`. Setup checks it straight away and installs nothing if the check fails.
+2. On the **License key** page enter your key, for example `A1B2-C3D4-E5F6-0718-9A0B-1C2D-3E4F-5061`. Setup checks it straight away and installs nothing if the check fails. **Each key works only once, on one PC.**
 3. Click Install, then read the final page - it repeats the one step below.
 
-If you reinstall on a PC that is already licensed, you may leave the key box empty.
+If you run Setup again on a PC that is already licensed, leave the key box empty.
 
 ## 2. Load TallyDues into TallyPrime (once)
 
@@ -51,6 +51,7 @@ Open a company and stay on the Gateway of Tally screen. TallyDues adds three ite
 | **TallyDues Run Check** | Checks cheques and invoices now and shows them as Windows notifications. If nothing falls in your timeframe you get a notification saying so. |
 | **TallyDues Dashboard** | Opens a screen listing every cheque / PDC and invoice in your timeframe: number, customer, amount, date, followed by your snoozed reminders. Shows *NO DUES* for an empty list. The last lines show the alert script in use and your license end date. Esc closes it. |
 | **TallyDues Settings** | Shows the four timeframe numbers with their current values (7 until you change them). Type a number, press Enter for the next box, then **Ctrl+A** to save. The values are remembered on this PC. |
+| **TallyDues Change License Key** | Opens a window where you enter a new license key. See *Changing your license key* below. |
 
 ## Snoozing a reminder
 
@@ -85,9 +86,20 @@ To renew:
 
 TallyDues also notices if the PC clock has been moved backward, and shows a notice asking you to correct the date and time.
 
+## Changing your license key
+
+Paying after a trial gives you a new key, shown on the OpenXpert portal under **My licenses**. Renewing keeps your key, so renewals need no change here.
+
+1. Connect this PC to the internet.
+2. In TallyPrime choose **TallyDues Change License Key** on the Gateway of Tally menu, or use Start Menu -> TallyDues -> **Change License Key**.
+3. Paste or type the new key and click **Continue**.
+4. Compare the two end dates, then click **Yes** to confirm.
+
+Your current license keeps working until the new key is accepted. The new key is then used up, and the old key is removed from this PC and cannot be used again. After 5 wrong keys, wait an hour before trying again. Change the key from the Windows account that installed TallyDues.
+
 ## Moving your license to another PC
 
-Each key has a number of seats, and each PC uses one. Uninstalling frees the seat if the PC is online. Otherwise release the PC on the OpenXpert portal under **My licenses**. Reinstalling on the same PC never uses another seat, and replacing one part, such as a disk, still counts as the same PC.
+A license key works only once, on one PC, and cannot be moved. To use TallyDues on a new PC, or after uninstalling or reinstalling Windows, please contact OpenXpert Solutions for a replacement key. Replacing one part of a PC, such as a disk, does not affect your license.
 
 ## Troubleshooting
 
@@ -96,7 +108,7 @@ Each key has a number of seats, and each PC uses one. Uninstalling frees the sea
 | Setup says it could not reach the license server | Check your internet connection and click **Retry**. Nothing has been installed. |
 | Setup says the answer could not be trusted | Your network may be redirecting the connection, for example a wifi login page. Sign in to that network or try another one. |
 | Setup says the key was not found | Check the key on the portal under **My licenses**. |
-| Setup says all seats are in use | Release a PC you no longer use on the portal under **My licenses**. |
+| Setup says the key has already been used | If this PC is still licensed, leave the key box empty. Otherwise contact OpenXpert Solutions for a replacement key. |
 | No welcome notification when TallyPrime starts | The add-on is not loaded: repeat step 2 (F1 -> TDL and Add-On -> F4) and restart TallyPrime. Otherwise Windows may be hiding notifications - see the next row. |
 | I never see Windows notifications | In Windows Settings -> System -> Notifications: turn notifications **On**, turn **Do Not Disturb / Focus Assist Off**, and make sure **Windows PowerShell** is On in the app list. Meanwhile choose Start Menu -> TallyDues -> **Alerts - also show pop-up boxes**; every alert then also appears as a pop-up box. The other two Alerts shortcuts switch it back. |
 | A TallyDues menu item does nothing | Make sure you are on the Gateway of Tally screen with a company open and that the add-on is loaded (step 2). If the Dashboard opens, its last lines show **Alert script in use**, which must be a file that exists on your PC (normally C:\ProgramData\TallyDues\...). If it is not, run Setup again and restart TallyPrime. |
@@ -104,14 +116,15 @@ Each key has a number of seats, and each PC uses one. Uninstalling frees the sea
 | Dashboard says NO DUES but I expected items | Check the dates: the timeframe is counted from TallyPrime's current date (F2). Open TallyDues Settings to see the numbers. Remember invoices are matched on voucher date. |
 | Settings numbers do not change | After typing a number press Enter to move on, and finish with Ctrl+A to save. |
 | A message says your license ended, but you have renewed | Connect this PC to the internet and wait up to 30 minutes, or click **Renew** again. If you paid in cash, OpenXpert may not have validated the payment yet. |
-| A message says TallyDues has no valid license, or that the license belongs to a different PC | Run Setup again and enter your license key. |
+| A message says TallyDues has no valid license, or that the license belongs to a different PC | Contact OpenXpert Solutions for a replacement key, then enter it with **TallyDues Change License Key**. |
+| A message says the license records were changed | Contact OpenXpert Solutions. |
 | A message says the Windows date looks wrong | Correct the Windows date and time. |
 
 ## Uninstalling
 
-1. Windows Settings -> Apps, or Start Menu -> TallyDues -> **Uninstall TallyDues**. This frees your seat when the PC is online, and cancels any pending snooze reminders.
+1. Windows Settings -> Apps, or Start Menu -> TallyDues -> **Uninstall TallyDues**. This deletes your license and cancels any pending snooze reminders. Your key cannot be used again, so reinstalling needs a replacement key from OpenXpert Solutions. A warning asks you to confirm first.
 2. In TallyPrime press F1 -> TDL and Add-On -> F4, remove the TallyDues file from the list, and restart TallyPrime (this part cannot be done by the uninstaller).
 
 ## About
 
-TallyDues is developed by **OpenXpert Solutions**. It reads your TallyPrime data to show reminders, and that data stays on your PC. Only your license key, hashed identifiers of this PC and the TallyDues version go to the OpenXpert portal, at install, on uninstall and while checking for a renewal. TallyPrime is a trademark of Tally Solutions Pvt. Ltd.; TallyDues is not affiliated with or endorsed by Tally Solutions.
+TallyDues is developed by **OpenXpert Solutions**. It reads your TallyPrime data to show reminders, and that data stays on your PC. Only your license key, hashed identifiers of this PC and the TallyDues version go to the OpenXpert portal, at install, when changing your key and while checking for a renewal. TallyPrime is a trademark of Tally Solutions Pvt. Ltd.; TallyDues is not affiliated with or endorsed by Tally Solutions.

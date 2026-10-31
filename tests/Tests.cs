@@ -31,7 +31,12 @@ namespace TallyDues.License.Tests
         public string ErrorCode;
         public int Calls;
         public int ConfirmFailures;
-        public int SeatsTaken;
+        public int Burns;
+        public int ReleaseCalls;
+        public bool LoseNextConfirm;
+        private bool burnedAndLost;
+        public string ConfirmError;
+        public Action OnHeartbeat;
 
         private readonly byte[] seed = Enumerable.Repeat((byte)7, 32).ToArray();
         private readonly byte[] otherSeed = Enumerable.Repeat((byte)9, 32).ToArray();
@@ -76,6 +81,14 @@ namespace TallyDues.License.Tests
             string path = head.Split(' ')[1];
             Calls++;
             if (Mode == "drop") return;
+            if (path.EndsWith("/confirm") && LoseNextConfirm)
+            {
+                // The portal burns the key, but its answer never arrives.
+                LoseNextConfirm = false;
+                burnedAndLost = true;
+                Burns++;
+                return;
+            }
             string status, json;
             Answer(path, new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(body)), out status, out json);
             byte[] output = Encoding.UTF8.GetBytes(json);
@@ -93,6 +106,8 @@ namespace TallyDues.License.Tests
             if (Mode == "redirect") { status = "302 Found"; json = "{}"; return; }
             if (Mode == "html") { json = "<html>captive wifi page</html>"; return; }
             if (ErrorCode != null) { status = ErrorCode == "invalid_key" ? "404 Not Found" : ErrorCode == "rate_limited" ? "429 Too Many" : "403 Forbidden"; json = "{\"error\":\"" + ErrorCode + "\"}"; return; }
+            if (path.EndsWith("/confirm") && ConfirmError != null) { status = "403 Forbidden"; json = "{\"error\":\"" + ConfirmError + "\"}"; return; }
+            if (path.EndsWith("/heartbeat") && OnHeartbeat != null) OnHeartbeat();
             string nonce = request["nonce"].ToString();
             if (Mode == "wrong-nonce") nonce = new string('a', 64);
             string payload;
@@ -109,12 +124,13 @@ namespace TallyDues.License.Tests
             }
             else if (path.EndsWith("/release"))
             {
-                SeatsTaken--;
+                ReleaseCalls++;
                 payload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\"}";
             }
             else
             {
-                if (path.EndsWith("/confirm")) SeatsTaken++;
+                // A repeated confirm after a lost answer must not burn twice.
+                if (path.EndsWith("/confirm")) { if (burnedAndLost) burnedAndLost = false; else Burns++; }
                 payload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\",\"valid_until\":\"" + ValidUntil + "\"}";
             }
             byte[] signature = Ed25519.Sign(Mode == "wrong-key" ? otherSeed : seed, Encoding.UTF8.GetBytes(payload));
@@ -161,8 +177,9 @@ namespace TallyDues.License.Tests
                 ClockChecks();
                 Warnings();
                 Renewal();
-                ReleaseSeat();
+                OneUseKeys();
                 ReviewFixes();
+                KeyChanges();
             }
             finally
             {
@@ -210,12 +227,13 @@ namespace TallyDues.License.Tests
         private static void HappyPath()
         {
             Reset();
-            int seats = portal.SeatsTaken;
+            int burns = portal.Burns;
             Check("validate ok", Run("validate") == ExitCodes.Ok);
-            Check("validate takes no seat", portal.SeatsTaken == seats);
+            Check("validate burns nothing", portal.Burns == burns);
             Check("no license before confirm", Run("check") == ExitCodes.NoLicense);
             Check("confirm ok", Run("confirm") == ExitCodes.Ok);
-            Check("confirm takes a seat", portal.SeatsTaken == seats + 1);
+            Check("confirm burns the key", portal.Burns == burns + 1);
+            Check("keyfile becomes the license", !File.Exists(Path.Combine(dir, "license.pending")));
             Check("check ok", Run("check") == ExitCodes.Ok);
             string stored = File.ReadAllText(Path.Combine(dir, "license.dat"));
             Check("key not stored in plain text", !stored.Contains(MockPortal.GoodKey));
@@ -227,7 +245,7 @@ namespace TallyDues.License.Tests
             var expected = new Dictionary<string, int>
             {
                 { "invalid_key", ExitCodes.InvalidKey }, { "expired", ExitCodes.KeyExpired }, { "revoked", ExitCodes.Revoked },
-                { "subscription_suspended", ExitCodes.Suspended }, { "limit_reached", ExitCodes.LimitReached }, { "rate_limited", ExitCodes.RateLimited }
+                { "subscription_suspended", ExitCodes.Suspended }, { "limit_reached", ExitCodes.KeyUsed }, { "key_used", ExitCodes.KeyUsed }, { "rate_limited", ExitCodes.RateLimited }
             };
             foreach (var pair in expected)
             {
@@ -283,6 +301,35 @@ namespace TallyDues.License.Tests
             Check("confirm offline stores nothing", !File.Exists(Path.Combine(dir, "license.dat")));
             portal.Mode = "ok";
             Check("confirm retry works", Run("confirm") == ExitCodes.Ok);
+
+            // The keyfile comes first, so a PC that cannot keep the license burns nothing.
+            Reset();
+            Run("validate");
+            int burns = portal.Burns;
+            Directory.CreateDirectory(Path.Combine(dir, "license.dat"));
+            Check("unwritable PC reports failure", Run("confirm") == ExitCodes.NoLicense);
+            Check("unwritable PC burns nothing", portal.Burns == burns);
+
+            // The key is burned but the answer is lost: the keyfile waits, alerts stay off, retry finishes.
+            Reset();
+            Run("validate");
+            burns = portal.Burns;
+            portal.LoseNextConfirm = true;
+            Check("lost answer reported", Run("confirm") == ExitCodes.Network);
+            Check("lost answer keeps the keyfile", File.Exists(Path.Combine(dir, "license.pending")));
+            Check("keyfile alone gives no alerts", Run("check") == ExitCodes.NoLicense);
+            Check("lost answer retry works", Run("confirm") == ExitCodes.Ok);
+            Check("lost answer burns once", portal.Burns == burns + 1);
+            Check("alerts on after the signed answer", Run("check") == ExitCodes.Ok);
+            Check("retry removes the keyfile", !File.Exists(Path.Combine(dir, "license.pending")));
+
+            // The portal refuses: no keyfile stays behind.
+            Reset();
+            Run("validate");
+            portal.ConfirmError = "limit_reached";
+            Check("used key reported at confirm", Run("confirm") == ExitCodes.KeyUsed);
+            Check("used key leaves no keyfile", !File.Exists(Path.Combine(dir, "license.pending")));
+            portal.ConfirmError = null;
         }
 
         private static void TamperedFiles()
@@ -292,6 +339,22 @@ namespace TallyDues.License.Tests
             string good = File.ReadAllText(path);
             File.WriteAllText(path, good.Replace("2027", "2099"));
             Check("edited end date refused", Run("check") == ExitCodes.NoLicense);
+
+            // A correctly signed file for this PC still fails if the seal does not match.
+            File.WriteAllText(path, good.Replace("\"Seal\":\"", "\"Seal\":\"A"));
+            Check("edited seal refused", Run("check") == ExitCodes.NoLicense);
+            File.WriteAllText(path, good);
+            string statePath = Path.Combine(dir, "state.dat");
+            Check("sealed state accepted", Run("check") == ExitCodes.Ok);
+            string goodState = File.ReadAllText(statePath);
+            File.WriteAllText(statePath, goodState.Replace("LASTSEEN=2", "LASTSEEN=1"));
+            Check("edited state refused", Run("check") == ExitCodes.NoLicense);
+            File.WriteAllText(statePath, goodState);
+            File.Delete(Path.Combine(dir, "seal.key"));
+            Check("missing seal key refused", Run("check") == ExitCodes.NoLicense);
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            good = File.ReadAllText(path);
 
             var license = new JavaScriptSerializer().Deserialize<LicenseFile>(good);
             license.Components = Machine.Components().Select(c => c.Replace('a', 'b')).ToArray();
@@ -366,17 +429,11 @@ namespace TallyDues.License.Tests
             Check("status shows new date", File.ReadAllText(Path.Combine(dir, "license-status.json")).Contains("30-Oct-2027"));
         }
 
-        private static void ReleaseSeat()
+        private static void OneUseKeys()
         {
             Install();
-            int seats = portal.SeatsTaken;
-            Check("release ok", Run("release") == ExitCodes.Ok);
-            Check("release frees the seat", portal.SeatsTaken == seats - 1);
-            portal.Mode = "drop";
-            Check("release offline reported", Run("release") == ExitCodes.Network);
-            portal.Mode = "ok";
-            File.Delete(Path.Combine(dir, "license.dat"));
-            Check("release with no license is fine", Run("release") == ExitCodes.Ok);
+            int calls = portal.ReleaseCalls;
+            Check("nothing releases a key", Run("release") == ExitCodes.Usage && portal.ReleaseCalls == calls);
         }
 
         private static void ReviewFixes()
@@ -386,7 +443,7 @@ namespace TallyDues.License.Tests
             Check("Laravel throttle reads as rate limited", Run("validate") == ExitCodes.RateLimited);
             portal.Mode = "ok";
 
-            // A saved validate answer must not count as a license: it takes no seat.
+            // A saved validate answer must not count as a license: it burns nothing.
             Install();
             string path = Path.Combine(dir, "license.dat");
             var serializer = new JavaScriptSerializer();
@@ -395,7 +452,7 @@ namespace TallyDues.License.Tests
             string validatePayload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\",\"confirm_token\":\"" + new string('t', 48) + "\",\"valid_until\":\"2099-01-01T00:00:00+00:00\"}";
             license.PayloadRaw = validatePayload;
             license.Signature = Convert.ToBase64String(Ed25519.Sign(Enumerable.Repeat((byte)7, 32).ToArray(), Encoding.UTF8.GetBytes(validatePayload)));
-            File.WriteAllText(path, serializer.Serialize(license));
+            new LicenseStore(dir).Save(license);
             Check("saved validate answer refused", Run("check") == ExitCodes.NoLicense);
 
             // Alerts start together: every one must pass, and a warning must show only once.
@@ -431,15 +488,200 @@ namespace TallyDues.License.Tests
             Check("renewal task near the end", Run("can-renew") == ExitCodes.Ok);
             Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-06-01T10:00:00");
             Check("renewal task after the end", Run("can-renew") == ExitCodes.Ok);
+        }
 
-            // The seat is given back if the license cannot be stored.
+        private static void KeyChanges()
+        {
+            const string newKey = "B1B2-C3D4-E5F6-0718-9A0B-1C2D-3E4F-5062";
+            string path;
+
+            // Refused before any network call.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            string before = File.ReadAllText(path);
+            int calls = portal.Calls;
+            Check("change: bad format refused", new KeyChange(dir).Preview("not-a-key") == ExitCodes.InvalidKey);
+            Check("change: empty refused", new KeyChange(dir).Preview("") == ExitCodes.InvalidKey);
+            Check("change: same key refused", new KeyChange(dir).Preview(" " + MockPortal.GoodKey.ToLowerInvariant() + " ") == ExitCodes.SameKey);
+            Check("change: no network for refused keys", portal.Calls == calls);
+
+            // Preview burns nothing and changes nothing.
+            int burns = portal.Burns;
+            var change = new KeyChange(dir);
+            portal.ValidUntil = "2028-01-31T10:00:00+00:00";
+            Check("change: preview ok", change.Preview(newKey) == ExitCodes.Ok);
+            Check("change: preview burns nothing", portal.Burns == burns);
+            Check("change: preview keeps the license", File.ReadAllText(path) == before);
+            Check("change: preview shows both dates", change.NewEnd.Year == 2028 && change.CurrentEnd.Value.Year == 2027);
+            Check("change: only last 4 shown", change.NewKeyEnding == "5062");
+
+            // Apply swaps the key and asks the portal to release nothing.
+            calls = portal.ReleaseCalls;
+            Check("change: apply ok", change.Apply() == ExitCodes.Ok);
+            Check("change: nothing released", portal.ReleaseCalls == calls);
+            Check("change: new key burned", portal.Burns == burns + 1);
+            string after = File.ReadAllText(path);
+            var serializer = new JavaScriptSerializer();
+            Check("change: new key stored", LicenseStore.Unprotect(serializer.Deserialize<LicenseFile>(after).KeyProtected) == newKey);
+            Check("change: neither key in plain text", !after.Contains(newKey) && !after.Contains(MockPortal.GoodKey));
+            Check("change: alerts pass", Run("check") == ExitCodes.Ok);
+            Check("change: status shows new date", File.ReadAllText(Path.Combine(dir, "license-status.json")).Contains("2028"));
+            Check("change: no key in other files", Directory.GetFiles(dir).All(f => !File.ReadAllText(f).Contains(newKey) && !File.ReadAllText(f).Contains(MockPortal.GoodKey)));
+            Check("change: apply cannot run twice", change.Apply() == ExitCodes.Usage);
+
+            // Earlier warnings do not carry over to the new license.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-04-20T10:00:00");
+            Run("check");
+            portal.ValidUntil = "2027-04-25T10:00:00+00:00";
+            change = new KeyChange(dir);
+            change.Preview(newKey);
+            change.Apply();
+            Run("check");
+            Check("change: warnings start again", File.ReadAllLines(outFile)[0] == "7");
+
+            // Failures leave the old license exactly as it was.
+            foreach (string error in new[] { "invalid_key", "expired", "revoked", "subscription_suspended", "limit_reached", "rate_limited" })
+            {
+                Install();
+                path = Path.Combine(dir, "license.dat");
+                before = File.ReadAllText(path);
+                portal.ErrorCode = error;
+                Check("change: " + error + " reported", new KeyChange(dir).Preview(newKey) != ExitCodes.Ok);
+                Check("change: " + error + " keeps license", File.ReadAllText(path) == before);
+            }
+            foreach (string mode in new[] { "tamper", "wrong-key", "wrong-nonce", "unsigned", "html", "redirect" })
+            {
+                Install();
+                path = Path.Combine(dir, "license.dat");
+                before = File.ReadAllText(path);
+                portal.Mode = mode;
+                Check("change: " + mode + " refused", new KeyChange(dir).Preview(newKey) == ExitCodes.BadResponse);
+                Check("change: " + mode + " keeps license", File.ReadAllText(path) == before);
+            }
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            before = File.ReadAllText(path);
+            portal.Mode = "drop";
+            Check("change: offline reported", new KeyChange(dir).Preview(newKey) == ExitCodes.Network);
+            portal.Mode = "ok";
+
+            // A forged confirm answer after a good preview changes nothing.
+            change = new KeyChange(dir);
+            change.Preview(newKey);
+            portal.Mode = "tamper";
+            Check("change: forged confirm refused", change.Apply() == ExitCodes.BadResponse);
+            Check("change: forged confirm keeps license", File.ReadAllText(path) == before);
+            portal.Mode = "ok";
+
+            change = new KeyChange(dir);
+            change.Preview(newKey);
+            portal.ConfirmError = "limit_reached";
+            Check("change: used key reported", change.Apply() == ExitCodes.KeyUsed);
+            Check("change: used key keeps license", File.ReadAllText(path) == before);
+            portal.ConfirmError = null;
+
+            // An old token is replaced once.
+            change = new KeyChange(dir);
+            change.Preview(newKey);
+            portal.ConfirmFailures = 1;
+            Check("change: old token retried", change.Apply() == ExitCodes.Ok);
+
+            // If this PC cannot save the license, the new key is not burned and the old license stays.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            before = File.ReadAllText(path);
+            change = new KeyChange(dir);
+            change.Preview(newKey);
+            burns = portal.Burns;
+            File.SetAttributes(path, FileAttributes.ReadOnly);
+            Check("change: failed save reported", change.Apply() == ExitCodes.NoLicense);
+            File.SetAttributes(path, FileAttributes.Normal);
+            Check("change: failed save keeps license", File.ReadAllText(path) == before);
+            Check("change: failed save burns nothing", portal.Burns == burns);
+            Check("change: alerts still pass", Run("check") == ExitCodes.Ok);
+
+            // A lost answer: the old license stays until the same token finishes the change.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            before = File.ReadAllText(path);
+            change = new KeyChange(dir);
+            change.Preview(newKey);
+            burns = portal.Burns;
+            portal.LoseNextConfirm = true;
+            Check("change: lost answer reported", change.Apply() == ExitCodes.Network);
+            Check("change: lost answer keeps license", File.ReadAllText(path) == before);
+            calls = portal.Calls;
+            Check("change: retry skips validate", change.Preview(newKey) == ExitCodes.Ok && portal.Calls == calls);
+            Check("change: retry finishes", change.Apply() == ExitCodes.Ok);
+            Check("change: lost answer burns once", portal.Burns == burns + 1);
+            Check("change: retry leaves no keyfile", !File.Exists(Path.Combine(dir, "license.pending")));
+
+            // An ended license and a missing one can both move to a new key.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-06-01T10:00:00");
+            Check("change: license has ended", Run("check") == ExitCodes.Expired);
+            portal.ValidUntil = "2028-06-01T10:00:00+00:00";
+            change = new KeyChange(dir);
+            Check("change: ended license can preview", change.Preview(newKey) == ExitCodes.Ok);
+            Check("change: ended license can apply", change.Apply() == ExitCodes.Ok);
+            Check("change: alerts back on", Run("check") == ExitCodes.Ok);
             Reset();
-            Run("validate");
-            int seats = portal.SeatsTaken;
-            string blocked = Path.Combine(dir, "license.dat");
-            Directory.CreateDirectory(blocked);
-            Check("failed save reports failure", Run("confirm") == ExitCodes.NoLicense);
-            Check("failed save frees the seat", portal.SeatsTaken == seats);
+            change = new KeyChange(dir);
+            Check("change: no license can preview", change.Preview(newKey) == ExitCodes.Ok);
+            Check("change: no license can apply", change.Apply() == ExitCodes.Ok);
+            Check("change: stale answer dated in the past refused", StaleDateRefused(newKey));
+
+            // Another Windows account cannot decrypt the key, so it cannot replace it.
+            foreach (string stored in new[] { "AAAA", "not base64!", null })
+            {
+                Install();
+                path = Path.Combine(dir, "license.dat");
+                LicenseFile license = serializer.Deserialize<LicenseFile>(File.ReadAllText(path));
+                license.KeyProtected = stored;
+                new LicenseStore(dir).Save(license);
+                calls = portal.Calls;
+                Check("change: other account refused", new KeyChange(dir).Preview(newKey) == ExitCodes.OtherAccount);
+                Check("change: other account makes no call", portal.Calls == calls);
+            }
+
+            // Wrong keys: 5 tries, then an hour, and the portal is not called meanwhile.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2026-12-01T10:00:00");
+            portal.ErrorCode = "invalid_key";
+            for (int i = 0; i < 5; i++) new KeyChange(dir).Preview(newKey);
+            calls = portal.Calls;
+            Check("change: locked after 5 wrong keys", new KeyChange(dir).Preview(newKey) == ExitCodes.TooManyTries);
+            Check("change: locked makes no call", portal.Calls == calls);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2026-12-01T11:01:00");
+            portal.ErrorCode = null;
+            Check("change: tries again after an hour", new KeyChange(dir).Preview(newKey) == ExitCodes.Ok);
+            Check("change: good key clears the count", !File.ReadAllText(Path.Combine(dir, "state.dat")).Contains("KEY_FAILS"));
+
+            // A renewal check already running must not put the old key back.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-06-01T10:00:00");
+            path = Path.Combine(dir, "license.dat");
+            LicenseFile swapped = serializer.Deserialize<LicenseFile>(File.ReadAllText(path));
+            swapped.KeyProtected = LicenseStore.Protect(newKey);
+            portal.ValidUntil = "2028-06-01T10:00:00+00:00";
+            string swappedText = null;
+            string swapDir = dir;
+            portal.OnHeartbeat = () =>
+            {
+                new LicenseStore(swapDir).Save(swapped);
+                swappedText = File.ReadAllText(path);
+            };
+            Check("change: renewal check backs off", Run("renew-check", "--force", "--quiet") == ExitCodes.NoChange);
+            portal.OnHeartbeat = null;
+            Check("change: renewal check keeps new key", File.ReadAllText(path) == swappedText);
+        }
+
+        private static bool StaleDateRefused(string key)
+        {
+            Reset();
+            portal.ValidUntil = "2020-01-01T10:00:00+00:00";
+            return new KeyChange(dir).Preview(key) == ExitCodes.BadResponse;
         }
 
         private static string WarnAt(string now)
@@ -461,6 +703,8 @@ namespace TallyDues.License.Tests
             portal.Mode = "ok";
             portal.ErrorCode = null;
             portal.ConfirmFailures = 0;
+            portal.ConfirmError = null;
+            portal.LoseNextConfirm = false;
             portal.ValidUntil = "2027-04-30T10:00:00+00:00";
             Environment.SetEnvironmentVariable("TD_TEST_MACHINE", "m1,m2,m3,m4");
             Environment.SetEnvironmentVariable("TD_TEST_NOW", null);

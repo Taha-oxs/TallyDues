@@ -7,8 +7,8 @@
 # runs, so Inno removes that last. It cannot remove the add-on from
 # TallyPrime's TDL list (Tally has no scripted way to do that): the user does
 # that in F1 > TDL and Add-On > F4.
-# The uninstaller frees the license seat before running this. Deleting the
-# install folder also removes license.dat and state.dat.
+# Deleting the install folder also removes license.dat and state.dat. The key
+# is burned on the portal and cannot be used again, so the uninstaller warns first.
 param(
   [string]$InstallDir = "$env:ProgramData\TallyDues"
 )

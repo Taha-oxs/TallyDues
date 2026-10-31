@@ -13,13 +13,16 @@ Be honest about the limit: the client can be patched. The design accepts this ri
 
 - **Internet:** needed only at install and while looking for a renewal. A valid license makes no network calls, so there is no periodic heartbeat. `heartbeat` runs only after the user clicks Renew or once the license has ended.
 - **One place:** all license logic is in `TallyDuesLicense.exe`. Setup and `notify.ps1` use its exit codes. The TDL has no date logic and only displays `license-status.json`.
+- **One activation ever:** each user has their own key. It is burned on first activation, even for the same PC. Renewal keeps the key; there is no `release`; a new PC needs a replacement key from an admin.
 - **Trial:** a portal key like any other. There is no trial code in the client.
 - **No offline activation** in the first release.
 
 ## Rules
 
 - **Key:** 32 hex characters in eight groups of four. Never log it or put it on a command line. Setup passes it in a temp file, and it is stored with DPAPI.
-- **Install:** `validate` changes nothing, and `confirm` takes the seat after files are in place. A failed or cancelled install must not take a seat.
+- **Key change:** the key is typed into the helper's own window only. Never add a key option to `change-key`, a `tallydues://` route, or key handling in the TDL. The old license stays until the new one is saved.
+- **Install:** `validate` changes nothing. The sealed keyfile `license.pending` is written first, then `confirm` burns the key, and alerts start only once the signed answer is stored. A failed install must not burn a key.
+- **Seal:** `license.dat` and `state.dat` carry an HMAC seal with a DPAPI machine-scope secret. It stops casual edits only. Never replace the encrypted key with an HMAC: the renewal check must send the key.
 - **Signatures:** verify every answer with the built-in Ed25519 public key and check the nonce. Verify the raw text of `payload`; never parse and rebuild it.
 - **Errors:** unsigned, so they may be shown but never change stored state.
 - **Machine:** only hashes leave the PC. The nonce binds a stored answer to the machine, using the portal's 3 of 4 rule.
@@ -30,4 +33,4 @@ Be honest about the limit: the client can be patched. The design accepts this ri
 
 ## Test before release
 
-`build\Run-Tests.ps1` covers the helper. On a real PC with a real test key: portal down, `limit_reached`, reinstall on the same machine (no new seat), disk replaced (still 3 of 4), cancelled install (no seat taken), standard user, and whether a PC's board or disk serial reads correctly.
+`build\Run-Tests.ps1` covers the helper. On a real PC with a real test key: portal down, a used key refused, reinstall over a licensed PC with the box empty, uninstall warning, disk replaced (still 3 of 4), cancelled install (key not burned), answer lost during `confirm`, standard user, and whether a PC's board or disk serial reads correctly.

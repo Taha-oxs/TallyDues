@@ -8,8 +8,8 @@
 ;;; Load it in TallyPrime: F1 Help > TDL and Add-On > F4 Manage Local
 ;;; TDLs > Load on startup Yes > pick this file > Ctrl+A. Restart Tally.
 ;;;
-;;; Menu: TallyDues Run Check, TallyDues Dashboard and TallyDues Settings are
-;;; on the Gateway of Tally menu.
+;;; Menu: TallyDues Run Check, TallyDues Dashboard, TallyDues Settings and
+;;; TallyDues Change License Key are on the Gateway of Tally menu.
 ;;; The license is enforced outside this file, by TallyDuesLicense.exe, which notify.ps1
 ;;; runs for every alert. This file does no date maths and no expiry test.
 ;;; =============================================================
@@ -630,6 +630,11 @@
    Add : Key Item : TallyDues Dashboard : J : Display : TDV2Dashboard
    Add : Key Item : TallyDues Run Check : Z : Call : TDV2RunCheck
    Add : Key Item : TallyDues Settings : G : Modify Variable : TDV2Settings
+   Add : Key Item : TallyDues Change License Key : Y : Call : TDV2ChangeKeyFn
+
+;;; Only opens the helper's own window. The key is typed there and never enters Tally.
+[Function: TDV2ChangeKeyFn]
+   010 : Browse URL : "C:\ProgramData\TallyDues\TallyDuesLicense.exe" : "change-key" : Yes
 
 ;;; Welcome notification: [System: Events] System Start (every Tally launch).
 ;;; ============ END TallyDues v1.0 - Developed by OpenXpert Solutions ============

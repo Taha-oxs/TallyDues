@@ -1,4 +1,6 @@
-// Files in the install folder: the signed license, the unsigned state and the Dashboard text.
+// Files in the install folder: the signed license, the state and the Dashboard text.
+// license.dat and state.dat carry an HMAC seal, so edits to them are refused. The seal's secret
+// is on this PC, so it stops casual edits only.
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -17,6 +19,12 @@ namespace TallyDues.License
         public string Random { get; set; }
         public string PayloadRaw { get; set; }
         public string Signature { get; set; }
+        public string Seal { get; set; }
+
+        public string SealedText()
+        {
+            return string.Join("\n", KeyProtected, Components == null ? "" : string.Join(",", Components), Random, PayloadRaw, Signature);
+        }
 
         public DateTimeOffset ValidUntil()
         {
@@ -30,7 +38,7 @@ namespace TallyDues.License
             if (Components == null || Components.Length != 4 || string.IsNullOrEmpty(Random)) return false;
             if (string.IsNullOrEmpty(PayloadRaw) || !Portal.IsTrusted(PayloadRaw, Signature)) return false;
             var payload = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(PayloadRaw);
-            // A validate answer holds a confirm token and never counts as a license: it takes no seat.
+            // A validate answer holds a confirm token and never counts as a license: it burns nothing.
             return Portal.AsString(payload, "result") == "ok"
                 && !payload.ContainsKey("confirm_token")
                 && Portal.AsString(payload, "valid_until").Length > 0
@@ -47,12 +55,18 @@ namespace TallyDues.License
         private string LicensePath { get { return Path.Combine(dir, "license.dat"); } }
         private string StatePath { get { return Path.Combine(dir, "state.dat"); } }
         private string StatusPath { get { return Path.Combine(dir, "license-status.json"); } }
+        private string PendingPath { get { return Path.Combine(dir, "license.pending"); } }
+        private string SealKeyPath { get { return Path.Combine(dir, "seal.key"); } }
+
+        // Set by LoadState when state.dat fails its seal.
+        public bool StateTampered { get; private set; }
 
         public LicenseFile Load()
         {
             try
             {
-                return new JavaScriptSerializer().Deserialize<LicenseFile>(File.ReadAllText(LicensePath, Encoding.ASCII));
+                LicenseFile license = new JavaScriptSerializer().Deserialize<LicenseFile>(File.ReadAllText(LicensePath, Encoding.ASCII));
+                return license != null && SealMatches(license.SealedText(), license.Seal) ? license : null;
             }
             catch (Exception)
             {
@@ -63,7 +77,111 @@ namespace TallyDues.License
         public void Save(LicenseFile license)
         {
             Directory.CreateDirectory(dir);
+            license.Seal = SealOf(license.SealedText());
             WriteAtomic(LicensePath, new JavaScriptSerializer().Serialize(license));
+            RemovePending();
+        }
+
+        // The keyfile comes before the portal call: a key is burned only once this PC has shown it
+        // can keep the license. It does not count as a license until the portal's signed answer arrives.
+        public bool WritePending(string key, string[] machine, string random)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                if (!LicenseCanBeReplaced()) return false;
+                var pending = new LicenseFile { KeyProtected = Protect(key), Components = machine, Random = random };
+                pending.Seal = SealOf(pending.SealedText());
+                string text = new JavaScriptSerializer().Serialize(pending);
+                WriteAtomic(PendingPath, text);
+                return File.ReadAllText(PendingPath, Encoding.ASCII) == text;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+            catch (CryptographicException)
+            {
+                return false;
+            }
+        }
+
+        public void RemovePending()
+        {
+            try
+            {
+                File.Delete(PendingPath);
+            }
+            catch (IOException)
+            {
+                // Replaced by the next try, and removed on uninstall.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Replaced by the next try, and removed on uninstall.
+            }
+        }
+
+        private bool LicenseCanBeReplaced()
+        {
+            if (Directory.Exists(LicensePath)) return false;
+            if (!File.Exists(LicensePath)) return true;
+            using (new FileStream(LicensePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) return true;
+        }
+
+        private string SealOf(string text)
+        {
+            using (var hmac = new HMACSHA256(SealSecret()))
+            {
+                return Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(text)));
+            }
+        }
+
+        private bool SealMatches(string text, string seal)
+        {
+            if (string.IsNullOrEmpty(seal) || !File.Exists(SealKeyPath)) return false;
+            string expected = SealOf(text);
+            if (expected.Length != seal.Length) return false;
+            int difference = 0;
+            for (int i = 0; i < seal.Length; i++) difference |= expected[i] ^ seal[i];
+            return difference == 0;
+        }
+
+        // Machine scope, because Setup and the alerts can run under different accounts on one PC.
+        private byte[] SealSecret()
+        {
+            if (File.Exists(SealKeyPath))
+            {
+                return ProtectedData.Unprotect(Convert.FromBase64String(File.ReadAllText(SealKeyPath, Encoding.ASCII)), null, DataProtectionScope.LocalMachine);
+            }
+            byte[] secret = new byte[32];
+            using (var random = RandomNumberGenerator.Create()) random.GetBytes(secret);
+            string temp = SealKeyPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, Convert.ToBase64String(ProtectedData.Protect(secret, null, DataProtectionScope.LocalMachine)), Encoding.ASCII);
+                File.Move(temp, SealKeyPath);
+                return secret;
+            }
+            catch (IOException)
+            {
+                // Another process wrote it first, so use that one.
+                if (!File.Exists(SealKeyPath)) throw;
+                return SealSecret();
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
+
+        private string StateText(Dictionary<string, string> state)
+        {
+            return string.Join("\r\n", state.Where(pair => pair.Key != "SEAL").OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value));
         }
 
         public static string Protect(string key)
@@ -81,6 +199,7 @@ namespace TallyDues.License
         public Dictionary<string, string> LoadState()
         {
             var state = new Dictionary<string, string>();
+            StateTampered = false;
             try
             {
                 foreach (string line in File.ReadAllLines(StatePath, Encoding.ASCII))
@@ -88,6 +207,18 @@ namespace TallyDues.License
                     int split = line.IndexOf('=');
                     if (split > 0) state[line.Substring(0, split).Trim()] = line.Substring(split + 1).Trim();
                 }
+                string seal;
+                state.TryGetValue("SEAL", out seal);
+                StateTampered = !SealMatches(StateText(state), seal);
+                state.Remove("SEAL");
+            }
+            catch (CryptographicException)
+            {
+                StateTampered = true;
+            }
+            catch (FormatException)
+            {
+                StateTampered = true;
             }
             catch (IOException)
             {
@@ -105,7 +236,12 @@ namespace TallyDues.License
         {
             try
             {
-                WriteAtomic(StatePath, string.Join("\r\n", state.Select(pair => pair.Key + "=" + pair.Value)));
+                string text = StateText(state);
+                WriteAtomic(StatePath, (text.Length > 0 ? text + "\r\n" : "") + "SEAL=" + SealOf(text));
+            }
+            catch (CryptographicException)
+            {
+                // Tried again on the next run.
             }
             catch (IOException)
             {

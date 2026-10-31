@@ -19,6 +19,8 @@ USE (in TallyPrime, at the Gateway of Tally screen)
   TallyDues Dashboard   list of due cheques/PDCs and invoices, plus the
                         reminders you have snoozed
   TallyDues Settings    change the alert timeframe (Ctrl+A saves)
+  TallyDues Change License Key
+                        enter a new license key (needs internet)
   These are items on the Gateway of Tally menu.
   The Dashboard's last lines show the alert script in use and your license
   end date.
@@ -41,10 +43,16 @@ RENEWING YOUR LICENSE
   After the end date alerts stop until you renew. The Dashboard and Settings
   stay open.
 
+CHANGING YOUR LICENSE KEY
+  Paying after a trial gives you a new key. Choose TallyDues Change License Key
+  on the Gateway of Tally menu, or Start Menu > TallyDues > Change License Key.
+  Your current license stays in place until the new key is accepted. The old
+  key is then removed from this PC and cannot be used again.
+
 MOVING TO ANOTHER PC
-  Uninstall TallyDues on the old PC while it is online, which frees its seat.
-  If that PC is offline or gone, release it on the OpenXpert portal under
-  My licenses. Then install on the new PC with the same key.
+  A license key works only once, on one PC, and cannot be moved. Please contact
+  OpenXpert Solutions for a replacement key. The same applies after uninstalling
+  TallyDues or reinstalling Windows.
 
 NOT SEEING NOTIFICATIONS?
   Windows may be hiding them. Turn notifications on, turn Do Not

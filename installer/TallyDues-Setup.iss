@@ -4,8 +4,9 @@
 ; Installs everything to C:\ProgramData\TallyDues (no admin rights, no
 ; folder choice). The customer enters a license key, paid or trial, which is
 ; checked with the portal before anything is installed. After the files are in
-; place, the seat is taken and the signed license stored; a failed or cancelled
-; install does not keep one. It then shows the one step that must be done inside
+; place, the keyfile is written, the portal burns the key (each key works once) and
+; the signed license is stored; a failed or cancelled install does not burn it,
+; unless the portal's answer was lost. It then shows the one step that must be done inside
 ; TallyPrime (loading the add-on).
 ;
 ; All license logic is in TallyDuesLicense.exe. Build it first: see build\Build-Helper.ps1.
@@ -69,7 +70,7 @@ WelcomeLabel2=This will install [name/ver] on your computer.%n%nTallyDues shows 
 [Files]
 Source: "splash.bmp"; Flags: dontcopy
 Source: "..\TallyDues\TallyDuesLicense.exe"; Flags: dontcopy
-Source: "..\TallyDues\*"; DestDir: "{app}"; Excludes: "license.dat,state.dat,license-status.json,license-notice.txt,install.log,{#AddonExclude}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\TallyDues\*"; DestDir: "{app}"; Excludes: "license.dat,license.pending,seal.key,state.dat,license-status.json,license-notice.txt,install.log,{#AddonExclude}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\TallyDues Folder"; Filename: "{app}"
@@ -77,17 +78,20 @@ Name: "{group}\User Guide"; Filename: "{app}\TallyDues-User-Guide.md"
 Name: "{group}\Alerts - also show pop-up boxes"; Filename: "wscript.exe"; Parameters: """{app}\TDV2Toast.vbs"" TallyDues setmode both"; WorkingDir: "{app}"; Comment: "Use this if Windows hides the notifications: every alert also appears as a pop-up box"
 Name: "{group}\Alerts - Windows notifications only"; Filename: "wscript.exe"; Parameters: """{app}\TDV2Toast.vbs"" TallyDues setmode toast"; WorkingDir: "{app}"; Comment: "Alerts appear only as Windows notifications"
 Name: "{group}\Alerts - automatic (default)"; Filename: "wscript.exe"; Parameters: """{app}\TDV2Toast.vbs"" TallyDues setmode auto"; WorkingDir: "{app}"; Comment: "Windows notifications, plus a pop-up only when Windows is blocking them"
+Name: "{group}\Change License Key"; Filename: "{app}\TallyDuesLicense.exe"; Parameters: "change-key"; WorkingDir: "{app}"; Comment: "Enter a new TallyDues license key"
 Name: "{group}\Uninstall TallyDues"; Filename: "{uninstallexe}"
 
 [Code]
 const
   // Exit codes from TallyDuesLicense.exe. Keep in step with ExitCodes in Program.cs.
   CodeOk = 0;
+  CodeExpired = 10;
+  CodeClockBack = 12;
   CodeInvalidKey = 20;
   CodeKeyExpired = 21;
   CodeRevoked = 22;
   CodeSuspended = 23;
-  CodeLimitReached = 24;
+  CodeKeyUsed = 24;
   CodeRateLimited = 25;
   CodeNetwork = 30;
   CodeBadResponse = 31;
@@ -130,9 +134,13 @@ begin
   end;
 end;
 
+// An ended license still counts: its key cannot be entered again, and renewing keeps that key.
 function InstalledLicenseOK: Boolean;
+var
+  Code: Integer;
 begin
-  Result := RunHelper('check --install-dir "' + ExpandConstant('{commonappdata}\TallyDues') + '"') = CodeOk;
+  Code := RunHelper('check --install-dir "' + ExpandConstant('{commonappdata}\TallyDues') + '"');
+  Result := (Code = CodeOk) or (Code = CodeExpired) or (Code = CodeClockBack);
 end;
 
 // 32 hex characters in eight groups of four.
@@ -160,7 +168,7 @@ begin
     CodeKeyExpired: Result := 'This license key has expired. Please renew it on the OpenXpert portal.';
     CodeRevoked: Result := 'This license key is no longer active. Please contact OpenXpert Solutions.';
     CodeSuspended: Result := 'The subscription for this key is suspended. Please check it on the OpenXpert portal.';
-    CodeLimitReached: Result := 'All seats on this key are in use. To move it to this PC, release the old PC on the OpenXpert portal under My licenses.';
+    CodeKeyUsed: Result := 'This license key has already been used, and a key works only once. If you are reinstalling on a PC that is still licensed, leave the box empty. Otherwise please contact OpenXpert Solutions for a replacement key.';
     CodeRateLimited: Result := 'Too many attempts. Please wait a while, then try again.';
     CodeBadResponse: Result := 'The answer from the license server could not be trusted. Your network may be redirecting it, for example on a public wifi login page. Please try another network, or contact OpenXpert Solutions.';
     CodeNotConfigured: Result := 'This is a test build of Setup. It cannot check license keys.';
@@ -236,7 +244,7 @@ begin
   LicensePage := CreateInputQueryPage(wpWelcome,
     'License key',
     'Enter your TallyDues license key.',
-    'Find your paid or 15-day trial key on the OpenXpert portal under My licenses. Setup checks it over the internet before installing anything. If TallyDues is already licensed on this PC, you may leave the box empty.');
+    'Find your paid or 15-day trial key on the OpenXpert portal under My licenses. Setup checks it over the internet before installing anything. Each key works only once. If TallyDues is already licensed on this PC, leave the box empty.');
   LicensePage.Add('License key:', False);
 end;
 
@@ -295,16 +303,16 @@ begin
   end;
 end;
 
-// Takes the seat. If that fails, a new install is removed. A PC that already had a license
-// keeps it, because the uninstaller would give up its seat and delete it.
-function ConfirmSeat: Boolean;
+// Writes the keyfile and has the portal burn the key. If that fails, a new install is removed.
+// A PC that already had a license keeps it, because the uninstaller would delete it.
+function ConfirmKey: Boolean;
 var
   Code, ResultCode, Waited: Integer;
   Reason: String;
 begin
   Code := HelperWithRetry('confirm --key-file "' + KeyFile + '" --state "' + StateFile + '" --install-dir "' + ExpandConstant('{app}') + '"',
     'Setup could not reach the license server to finish.' + #13#10 + #13#10 +
-    'Please check your internet connection, then click Retry. If you cancel, this key is not applied.');
+    'Please check your internet connection, then click Retry. If you cancel, this key is not applied, and the portal may already have used it up.');
   Result := Code = CodeOk;
   if Result then
     Exit;
@@ -315,9 +323,10 @@ begin
   if HadLicense then
   begin
     InstallNote := Reason + #13#10 + #13#10 + 'The new key was not applied. Your existing TallyDues license is still in place.';
+    DeleteFile(ExpandConstant('{app}\license.pending'));
     Exit;
   end;
-  InstallNote := Reason + #13#10 + #13#10 + 'TallyDues was removed. Running Setup again on this PC with the same key will not use another seat.';
+  InstallNote := Reason + #13#10 + #13#10 + 'TallyDues was removed. Run Setup again with the same key. If Setup says the key has already been used, please contact OpenXpert Solutions for a replacement key.';
   Exec(ExpandConstant('{uninstallexe}'), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
   // The uninstaller relaunches itself from a temp copy, so Exec can return before it finishes.
   Waited := 0;
@@ -343,16 +352,16 @@ begin
     Ran := Exec('powershell.exe', Args, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
     if not Ran then
     begin
-      InstallNote := 'Setup could not launch PowerShell to finish installing TallyDues. No seat was used.' + #13#10 +
+      InstallNote := 'Setup could not launch PowerShell to finish installing TallyDues. Your key was not used.' + #13#10 +
         'Please contact OpenXpert Solutions.';
     end
     else if ResultCode <> 0 then
     begin
-      InstallNote := 'The TallyDues setup script reported an error (exit code ' + IntToStr(ResultCode) + '). No seat was used.' + #13#10 +
+      InstallNote := 'The TallyDues setup script reported an error (exit code ' + IntToStr(ResultCode) + '). Your key was not used.' + #13#10 +
         'Details are in C:\ProgramData\TallyDues\install.log - please send that file to OpenXpert Solutions.';
     end
     else if KeyEntered then
-      InstallOK := ConfirmSeat
+      InstallOK := ConfirmKey
     else
       InstallOK := True;
     DeleteFile(KeyFile);
@@ -392,22 +401,23 @@ begin
   DeleteFile(ExpandConstant('{tmp}\confirm.txt'));
 end;
 
+// The key is burned and the script below deletes the stored license, so uninstalling cannot be undone.
+// Setup's own rollback runs silently and skips this.
+function InitializeUninstall: Boolean;
+begin
+  Result := UninstallSilent or
+    (MsgBox('Uninstalling deletes your TallyDues license from this PC.' + #13#10 + #13#10 +
+      'Your license key works only once, so it cannot be used again. To reinstall, you will need a replacement key from OpenXpert Solutions.' + #13#10 + #13#10 +
+      'Do you want to uninstall?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  Ps1Path, Helper: String;
+  Ps1Path: String;
   ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
-    // Free the seat first: the script below deletes the stored license.
-    Helper := ExpandConstant('{app}\TallyDuesLicense.exe');
-    if FileExists(Helper) then
-    begin
-      if (not Exec(Helper, 'release --install-dir "' + ExpandConstant('{app}') + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode)
-          or (ResultCode <> CodeOk)) and (not UninstallSilent) then
-        MsgBox('TallyDues could not reach the license server to free this PC''s seat.' + #13#10 + #13#10 +
-          'To use your key on another PC, release this one on the OpenXpert portal under My licenses.', mbInformation, MB_OK);
-    end;
     Ps1Path := ExpandConstant('{app}\Uninstall-TallyDues.ps1');
     if FileExists(Ps1Path) then
       Exec('powershell.exe',

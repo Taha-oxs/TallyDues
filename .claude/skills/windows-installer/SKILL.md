@@ -27,7 +27,7 @@ Setup is Inno Setup: `installer\TallyDues-Setup.iss`. `TallyDues\Install-TallyDu
 
 - **Elevation:** `HKCU` protocol registration and DPAPI are per user, so an admin elevating from another account breaks them. Multiple accounts are unsupported in the first release.
 - **Fixed path:** the add-on holds `C:\ProgramData\TallyDues\TDV2Toast.vbs`, so `Install-TallyDues.ps1` refuses any other folder.
-- **Uninstall:** the script deletes `InstallDir`, so `snooze.json` goes too. Seat release runs first because it needs `license.dat`.
+- **Uninstall:** the script deletes `InstallDir`, so `snooze.json` goes too. The uninstaller warns first, because the key cannot be used again.
 - **TDL list:** Setup cannot add or remove the add-on in TallyPrime's F4 list, so the user does that.
 
 ## Definition of done

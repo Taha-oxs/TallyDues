@@ -31,7 +31,7 @@ Give the user the shortest list of cases that covers the change, then record the
 ## Cases
 
 **S: Smoke** (always)
-- S1 Add-on loads with no error, and the Gateway shows three items
+- S1 Add-on loads with no error, and the Gateway shows four items
 - S2 Welcome notification on start
 - S3 Dashboard shows the expected script path and license text
 
@@ -62,12 +62,14 @@ Give the user the shortest list of cases that covers the change, then record the
 **I: Installer**
 - I1 Fresh, I2 reinstall with key box empty, I3 uninstall leaves no task or link handler
 - I4 Standard user
-- I5 Cancel at each page: nothing installed, no seat taken
+- I5 Cancel at each page: nothing installed, key not burned
+- I6 Uninstall warning: No is the default and keeps everything; Yes removes everything
 
 **L: License** (needs the portal, or a build against a mock)
 - L1 Valid paid key, L2 trial key, L3 wrong format, L4 each portal error shows its own message
 - L5 No internet at License Key page: message, Retry works once online
-- L6 Internet lost before `confirm`: Retry works; Cancel removes the install and takes no seat
+- L6 Internet lost before `confirm`: Retry works; Cancel removes the install and does not burn the key
+- L6a Answer lost after the portal burned the key (needs the portal's repeatable `confirm`): Retry finishes, one activation on the portal
 - L7 Portal returns a wifi login page: not trusted, nothing installed
 - L8 Clock moved back: alerts paused with a message
 - L9 Edited `license.dat`, and `license.dat` copied to another PC: refused
@@ -75,8 +77,14 @@ Give the user the shortest list of cases that covers the change, then record the
 - L11 After the end date: alerts stop, Renew and Cancel shown, Dashboard and Settings open, TallyPrime usable
 - L12 Renew offline: browser fails to load; connect; after renewal on the portal, alerts return with no reinstall
 - L13 Pop-up mode: Yes on the pop-up does what Renew does
-- L14 Uninstall online frees the seat; offline shows the portal message
-- L15 Reinstall on the same PC takes no new seat
+- L14 A key already used, on this PC or another: refused with the replacement key message
+- L15 Setup over a licensed PC, valid and ended, with the box empty: installs, license kept
+- L16 Change License Key opens from the Gateway and the Start Menu, in front of TallyPrime, with the key masked and copy refused
+- L17 Change to a good key: both dates shown, No changes nothing, Yes activates it, the Dashboard footer updates
+- L18 Change with a wrong key, the same key, no internet and a used key: own message each, old license keeps working
+- L19 Change after the license has ended: alerts return. Five wrong keys: an hour's wait
+- L21 Edited `state.dat`, or deleted `seal.key`: alerts stop with a message
+- L20 Clipboard no longer holds the key after the window closes; text copied earlier that is not the key stays
 
 ## Run log
 

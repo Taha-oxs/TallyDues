@@ -25,7 +25,7 @@ try {
   $sources = @($config) + @(Get-ChildItem (Join-Path $root "TallyDuesLicense\*.cs") | Where-Object { $_.Name -ne "Config.cs" } | ForEach-Object { $_.FullName })
   $out = Join-Path $root "TallyDues\TallyDuesLicense.exe"
   & $csc /nologo /target:winexe /optimize+ /platform:anycpu "/out:$out" "/win32icon:$(Join-Path $root 'TallyDues\Scripts\branding\icon.ico')" `
-    /r:System.Numerics.dll /r:System.Web.Extensions.dll /r:System.Management.dll /r:System.Security.dll /r:System.Core.dll $sources
+    /r:System.Numerics.dll /r:System.Web.Extensions.dll /r:System.Management.dll /r:System.Security.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll $sources
   if ($LASTEXITCODE -ne 0) { throw "The license helper did not compile." }
   Write-Host "Built $out"
 } finally {

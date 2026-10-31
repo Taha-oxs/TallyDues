@@ -27,12 +27,15 @@ namespace TallyDues.License
         public const int KeyExpired = 21;
         public const int Revoked = 22;
         public const int Suspended = 23;
-        public const int LimitReached = 24;
+        public const int KeyUsed = 24;
         public const int RateLimited = 25;
         public const int Network = 30;
         public const int BadResponse = 31;
         public const int NotConfigured = 32;
         public const int NoChange = 40;
+        public const int SameKey = 41;
+        public const int TooManyTries = 42;
+        public const int OtherAccount = 43;
     }
 
     internal static class Program
@@ -72,16 +75,19 @@ namespace TallyDues.License
                 case "confirm": return Confirm(options, dir);
                 case "check": return Check(options, dir);
                 case "renew-check": return RenewCheck(options, dir);
-                case "release": return Release(dir);
                 case "open-renewal": return OpenRenewal();
                 case "can-renew": return CanRenew(dir);
+#if !TEST_BUILD
+                // Takes no key option on purpose: the key can only be typed into the window.
+                case "change-key": return KeyChangeWindow.ShowWindow(dir);
+#endif
                 default: return ExitCodes.Usage;
             }
         }
 
         // Cheque and invoice alerts start together, so file updates take turns across processes.
         // If the wait runs out the work goes ahead, because a late alert is worse than a lost warning.
-        private static T WithLock<T>(Func<T> action)
+        internal static T WithLock<T>(Func<T> action)
         {
             using (var mutex = new Mutex(false, @"Local\TallyDues-License"))
             {
@@ -120,7 +126,8 @@ namespace TallyDues.License
             return ExitCodes.Ok;
         }
 
-        // Takes the seat after a successful install and stores the signed license.
+        // After a successful install: writes the keyfile, tells the portal, which burns the key,
+        // then stores the signed license. Alerts stay off until the signed answer is stored.
         private static int Confirm(Dictionary<string, string> options, string dir)
         {
             string key = ReadKey(options);
@@ -129,21 +136,42 @@ namespace TallyDues.License
             string token = File.ReadAllText(options["state"], Encoding.ASCII).Trim();
             string random = NewRandom();
             string nonce = Machine.Nonce(machine, random);
+            var store = new LicenseStore(dir);
+            if (!store.WritePending(key, machine, random)) return ExitCodes.NoLicense;
             SignedAnswer answer;
             try
             {
-                answer = Portal.Post("/api/v1/tally/confirm", Request("confirm_token", token, machine, nonce), nonce);
+                try
+                {
+                    answer = Portal.Post("/api/v1/tally/confirm", Request("confirm_token", token, machine, nonce), nonce);
+                }
+                catch (PortalException e)
+                {
+                    // The token lasts 30 minutes and works once. An old token reports invalid_key.
+                    if (e.ExitCode != ExitCodes.InvalidKey) throw;
+                    int validated = Validate(options);
+                    if (validated != ExitCodes.Ok)
+                    {
+                        store.RemovePending();
+                        return validated;
+                    }
+                    token = File.ReadAllText(options["state"], Encoding.ASCII).Trim();
+                    answer = Portal.Post("/api/v1/tally/confirm", Request("confirm_token", token, machine, nonce), nonce);
+                }
             }
             catch (PortalException e)
             {
-                // The token lasts 30 minutes and works once. An old token reports invalid_key.
-                if (e.ExitCode != ExitCodes.InvalidKey) throw;
-                int validated = Validate(options);
-                if (validated != ExitCodes.Ok) return validated;
-                token = File.ReadAllText(options["state"], Encoding.ASCII).Trim();
-                answer = Portal.Post("/api/v1/tally/confirm", Request("confirm_token", token, machine, nonce), nonce);
+                // After a lost connection the portal may have burned the key, so the retry needs the keyfile.
+                if (e.ExitCode != ExitCodes.Network) store.RemovePending();
+                throw;
             }
-            var store = new LicenseStore(dir);
+            return StoreConfirmed(store, key, machine, random, answer);
+        }
+
+        // Saves a confirmed license. If it cannot be saved, any license already there stays as it was.
+        // The key is burned by now and cannot be given back, which is why WritePending tests the folder first.
+        internal static int StoreConfirmed(LicenseStore store, string key, string[] machine, string random, SignedAnswer answer)
+        {
             var license = new LicenseFile
             {
                 KeyProtected = LicenseStore.Protect(key),
@@ -152,18 +180,26 @@ namespace TallyDues.License
                 PayloadRaw = answer.PayloadRaw,
                 Signature = answer.Signature
             };
-            if (!license.IsAuthentic()) return FreeSeatAfterFailure(key, machine, ExitCodes.BadResponse);
+            if (!license.IsAuthentic())
+            {
+                store.RemovePending();
+                return ExitCodes.BadResponse;
+            }
             try
             {
-                store.Save(license);
+                WithLock<object>(() =>
+                {
+                    store.Save(license);
+                    return null;
+                });
             }
             catch (IOException)
             {
-                return FreeSeatAfterFailure(key, machine, ExitCodes.NoLicense);
+                return ExitCodes.NoLicense;
             }
             catch (UnauthorizedAccessException)
             {
-                return FreeSeatAfterFailure(key, machine, ExitCodes.NoLicense);
+                return ExitCodes.NoLicense;
             }
             // A new license starts clean, so a wrong date seen earlier cannot block it.
             WithLock<object>(() =>
@@ -172,26 +208,14 @@ namespace TallyDues.License
                 state.Remove("LASTSEEN");
                 state.Remove("WARN_FOR");
                 state.Remove("WARN_LEVEL");
+                state.Remove("LAST_TRY");
+                state.Remove("KEY_FAILS");
+                state.Remove("KEY_FAIL_AT");
                 store.SaveState(state);
                 store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()));
                 return null;
             });
             return ExitCodes.Ok;
-        }
-
-        // The portal holds the seat by now, but this PC has no license. Try to give the seat back.
-        private static int FreeSeatAfterFailure(string key, string[] machine, int failure)
-        {
-            try
-            {
-                string nonce = Machine.Nonce(machine, NewRandom());
-                Portal.Post("/api/v1/tally/release", Request("key", key, machine, nonce), nonce);
-            }
-            catch (PortalException)
-            {
-                // Installing again on this PC reuses the seat, so nothing is lost.
-            }
-            return failure;
         }
 
         // Only a license that has ended or is about to end may start the renewal task, since
@@ -221,17 +245,23 @@ namespace TallyDues.License
             LicenseFile license = store.Load();
             if (license == null || !license.IsAuthentic())
             {
-                message = "TallyDues has no valid license on this PC. Please reinstall TallyDues and enter your license key.";
+                message = "TallyDues has no valid license on this PC. A license key works only once, so please contact OpenXpert Solutions for a replacement key, then enter it with TallyDues Change License Key.";
                 store.WriteStatus("No valid license");
                 return ExitCodes.NoLicense;
             }
             if (!Machine.IsSameMachine(license.Components, Machine.Components()))
             {
-                message = "This TallyDues license belongs to a different PC. Please reinstall TallyDues and enter your license key.";
+                message = "This TallyDues license belongs to a different PC. A license key works only once, so please contact OpenXpert Solutions for a replacement key, then enter it with TallyDues Change License Key.";
                 store.WriteStatus("License belongs to a different PC");
                 return ExitCodes.OtherMachine;
             }
             Dictionary<string, string> state = store.LoadState();
+            if (store.StateTampered)
+            {
+                message = "The TallyDues license records on this PC were changed, so alerts have stopped. Please contact OpenXpert Solutions.";
+                store.WriteStatus("License records were changed");
+                return ExitCodes.NoLicense;
+            }
             DateTime today = Now().Date;
             DateTime lastSeen;
             string seen;
@@ -253,7 +283,7 @@ namespace TallyDues.License
             {
                 store.SaveState(state);
                 store.WriteStatus("License ended on " + endText);
-                message = "Your TallyDues license ended on " + endText + ", so alerts have stopped. Click Renew to renew it.";
+                message = "Your TallyDues license ended on " + endText + ", so alerts have stopped. Click Renew to renew it. If you have a new license key, use TallyDues Change License Key on the Gateway of Tally.";
                 return ExitCodes.Expired;
             }
             double days = (end - new DateTimeOffset(Now())).TotalDays;
@@ -323,35 +353,24 @@ namespace TallyDues.License
             if (renewed.ValidUntil() <= license.ValidUntil()) return ExitCodes.NoChange;
 
             string endText = ShowDate(renewed.ValidUntil());
+            bool replaced = false;
             WithLock<object>(() =>
             {
+                // The key may have been changed during the portal call. Never put the old one back.
+                LicenseFile latest = store.Load();
+                if (latest == null || latest.KeyProtected != license.KeyProtected)
+                {
+                    replaced = true;
+                    return null;
+                }
                 store.Save(renewed);
                 ClearWarnings(store);
                 store.WriteStatus("License valid until " + endText);
                 return null;
             });
+            if (replaced) return ExitCodes.NoChange;
             RemoveRenewTask();
             if (!options.ContainsKey("quiet")) ShowRenewed(dir, endText);
-            return ExitCodes.Ok;
-        }
-
-        // Frees this machine's seat. The caller tells the user if the portal cannot be reached.
-        private static int Release(string dir)
-        {
-            LicenseFile license = new LicenseStore(dir).Load();
-            if (license == null) return ExitCodes.Ok;
-            string key;
-            try
-            {
-                key = LicenseStore.Unprotect(license.KeyProtected);
-            }
-            catch (CryptographicException)
-            {
-                return ExitCodes.NoLicense;
-            }
-            string[] machine = Machine.Components();
-            string nonce = Machine.Nonce(machine, NewRandom());
-            Portal.Post("/api/v1/tally/release", Request("key", key, machine, nonce), nonce);
             return ExitCodes.Ok;
         }
 
@@ -371,7 +390,7 @@ namespace TallyDues.License
             Process.Start(new ProcessStartInfo("wscript.exe", arguments) { UseShellExecute = false, CreateNoWindow = true });
         }
 
-        private static void RemoveRenewTask()
+        internal static void RemoveRenewTask()
         {
 #if !TEST_BUILD
             try
@@ -396,7 +415,7 @@ namespace TallyDues.License
             store.SaveState(state);
         }
 
-        private static Dictionary<string, object> Request(string credentialName, string credential, string[] machine, string nonce)
+        internal static Dictionary<string, object> Request(string credentialName, string credential, string[] machine, string nonce)
         {
             return new Dictionary<string, object>
             {
@@ -409,11 +428,16 @@ namespace TallyDues.License
 
         private static string ReadKey(Dictionary<string, string> options)
         {
-            string key = File.ReadAllText(options["key-file"], Encoding.ASCII).Trim().ToUpperInvariant();
+            return NormalizeKey(File.ReadAllText(options["key-file"], Encoding.ASCII));
+        }
+
+        internal static string NormalizeKey(string text)
+        {
+            string key = (text ?? "").Trim().ToUpperInvariant();
             return Regex.IsMatch(key, "^[0-9A-F]{4}(-[0-9A-F]{4}){7}$") ? key : null;
         }
 
-        private static string NewRandom()
+        internal static string NewRandom()
         {
             byte[] bytes = new byte[32];
             using (var random = RandomNumberGenerator.Create()) random.GetBytes(bytes);
@@ -425,7 +449,7 @@ namespace TallyDues.License
             return date.LocalDateTime.ToString("dd-MMM-yyyy", CultureInfo.InvariantCulture);
         }
 
-        private static DateTime Now()
+        internal static DateTime Now()
         {
 #if TEST_BUILD
             string fake = Environment.GetEnvironmentVariable("TD_TEST_NOW");

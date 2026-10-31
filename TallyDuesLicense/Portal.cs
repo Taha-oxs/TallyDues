@@ -29,7 +29,8 @@ namespace TallyDues.License
             { "expired", ExitCodes.KeyExpired },
             { "revoked", ExitCodes.Revoked },
             { "subscription_suspended", ExitCodes.Suspended },
-            { "limit_reached", ExitCodes.LimitReached },
+            { "key_used", ExitCodes.KeyUsed },
+            { "limit_reached", ExitCodes.KeyUsed },
             { "rate_limited", ExitCodes.RateLimited }
         };
 
