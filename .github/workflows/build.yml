@@ -1,7 +1,9 @@
-# Builds TallyDues-Store-Setup.exe with Inno Setup on a Windows runner.
+# Runs the license tests and builds an unsigned test TallyDues-Setup.exe on a Windows runner.
+# The test build holds placeholders, so it cannot activate a key. Signed releases are built
+# on your own PC with build\Build-Release.ps1, so the certificate never comes to GitHub.
 # Starts on every push and can be started by hand (Actions tab > Run workflow).
 # Developed by OpenXpert Solutions
-name: Build TallyDues licensed installer
+name: Build TallyDues installer
 
 on:
   push:
@@ -14,6 +16,14 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
+      - name: Test the license helper
+        shell: powershell
+        run: .\build\Run-Tests.ps1
+
+      - name: Build the license helper
+        shell: powershell
+        run: .\build\Build-Helper.ps1
+
       - name: Compile the installer with Inno Setup
         shell: pwsh
         run: |
@@ -22,13 +32,13 @@ jobs:
             choco install innosetup -y --no-progress
           }
           if (-not (Test-Path -LiteralPath $iscc)) { throw "ISCC.exe not found after installing Inno Setup." }
-          & $iscc "installer-store\TallyDues-Store-Setup.iss"
+          & $iscc "installer\TallyDues-Setup.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed (exit code $LASTEXITCODE)." }
-          Get-ChildItem "installer-store\Output" | Format-Table Name, Length
+          Get-ChildItem "installer\Output" | Format-Table Name, Length
 
       - name: Publish the Setup program
         uses: actions/upload-artifact@v4
         with:
-          name: TallyDues-Store-Setup
-          path: installer-store/Output/TallyDues-Store-Setup.exe
+          name: TallyDues-Setup-test
+          path: installer/Output/TallyDues-Setup.exe
           if-no-files-found: error

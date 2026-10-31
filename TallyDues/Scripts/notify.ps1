@@ -1,4 +1,4 @@
-# notify.ps1 (PRODUCTION / licensed build)
+# notify.ps1
 # TallyDues - branded Windows desktop toast engine, HARDENED, with license gate.
 # Developed by OpenXpert Solutions
 #
@@ -17,15 +17,17 @@
 #    message is saved in pending\<id>.txt (pruned after 7 days) and
 #    TallyDuesProtocol.ps1 turns a click into a one-off scheduled task.
 #    Any problem there only drops the snooze buttons; the toast still shows.
-#  - LICENSE GATE: before anything is shown, LicenseCommon.ps1 (next to this
-#    script) checks the installed license.lic (signature, end date) and
-#    state.dat (clock rolled back?). Fails closed: a missing LicenseCommon.ps1
-#    or any error in the check counts as "not licensed". A blocked run shows a
-#    "TallyDues - License issue" notice instead of the alert.
+#  - LICENSE GATE: before anything is shown, TallyDuesLicense.exe (next to this
+#    script) checks the signed license, this machine and the clock, with no
+#    network call. Fails closed: a missing helper or any error in the check
+#    counts as "not licensed". A blocked run shows a "TallyDues - License"
+#    notice instead of the alert, with a Renew button when renewing would help.
+#    An ended license also starts a background check for a renewal.
 #  - -NoToast: run the gate only (used by the bridge for pop-up-only mode).
 #  Exit codes: 0 = licensed and shown (or -NoToast and licensed);
 #              2 = licensed, nothing could be shown;
-#              3 = license problem, notice shown; 4 = license problem, nothing shown.
+#              3 = license problem, notice shown; 4 = license problem, nothing shown;
+#              5 = as 0, and a license-ending warning is waiting in license-notice.txt.
 #  Exit 1 is intentionally unused (it is PowerShell's own error code).
 
 param(
@@ -128,6 +130,22 @@ function Clear-ExpiredSnoozes {
     } catch { Write-TDLog ("snooze board cleanup skipped: " + $_) }
 }
 
+function Clear-OldPending {
+    # Saved messages hold customer text, so they are removed on every run: 7 days for
+    # toasts never snoozed, 35 for snoozed ones (a snooze task lasts up to about 33 days).
+    try {
+        $pdir = Join-Path $ScriptRoot 'pending'
+        if (-not (Test-Path -LiteralPath $pdir)) { return }
+        Get-ChildItem -LiteralPath $pdir -Filter '*.txt' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force -ErrorAction SilentlyContinue
+        $sdir = Join-Path $pdir 'snoozed'
+        if (Test-Path -LiteralPath $sdir) {
+            Get-ChildItem -LiteralPath $sdir -Filter '*.txt' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-35) } | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    } catch { Write-TDLog ("pending cleanup skipped: " + $_) }
+}
+
 function Show-NativeToast([string]$T0, [string]$M0, [string]$Type) {
     # Real Windows toast through the built-in WinRT API. Needs NO extra module.
     # Uses Windows PowerShell's own app identity so Windows always accepts it.
@@ -144,26 +162,28 @@ function Show-NativeToast([string]$T0, [string]$M0, [string]$Type) {
     }
     # Snooze buttons: cheque and invoice toasts only (not welcome / nothing-due / expiry).
     $snoozeXml = ''
-    if ($Type -ne 'general') {
+    if ($Type -eq 'pdc' -or $Type -eq 'invoice') {
         try {
             $id = [guid]::NewGuid().ToString('N').Substring(0, 12)
             $pdir = Join-Path $ScriptRoot 'pending'
             if (-not (Test-Path -LiteralPath $pdir)) { New-Item -ItemType Directory -Path $pdir -Force | Out-Null }
-            Get-ChildItem -LiteralPath $pdir -Filter '*.txt' -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force -ErrorAction SilentlyContinue
             [IO.File]::WriteAllText((Join-Path $pdir ($id + '.txt')), ($Type + "`r`n" + $T0 + "`r`n" + $M0), (New-Object System.Text.UTF8Encoding($false)))
             $snoozeXml = '<action content="Snooze 1 day" arguments="tallydues://snooze/1/' + $id + '" activationType="protocol"/>' +
                          '<action content="Snooze 3 days" arguments="tallydues://snooze/3/' + $id + '" activationType="protocol"/>'
         } catch { Write-TDLog ("snooze buttons skipped: " + $_) }
     }
+    if ($Type -eq 'renew') {
+        $actionsXml = '<action content="Renew" arguments="tallydues://renew" activationType="protocol"/>' +
+            '<action content="Cancel" arguments="dismiss" activationType="system"/>'
+    } else {
+        $actionsXml = '<action content="View Details" arguments="tallydues://view/' + $Type + '" activationType="protocol"/>' +
+            $snoozeXml +
+            '<action content="Close" arguments="dismiss" activationType="system"/>'
+    }
     $xmlText = '<toast><visual><binding template="ToastGeneric">' + $logoXml +
         '<text>' + $t + '</text><text>' + $m + '</text>' +
         '<text placement="attribution">Developed by OpenXpert Solutions</text>' +
-        '</binding></visual><actions>' +
-        '<action content="View Details" arguments="tallydues://view/' + $Type + '" activationType="protocol"/>' +
-        $snoozeXml +
-        '<action content="Close" arguments="dismiss" activationType="system"/>' +
-        '</actions></toast>'
+        '</binding></visual><actions>' + $actionsXml + '</actions></toast>'
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml($xmlText)
     $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
@@ -192,23 +212,45 @@ function Show-Anything([string]$T, [string]$M, [string]$Type) {
 }
 
 Clear-ExpiredSnoozes
+Clear-OldPending
 
 # --- License gate (fails closed) ---
-$blockReason = ""
+$helper = Join-Path $ScriptRoot "TallyDuesLicense.exe"
+$noticeFile = Join-Path $ScriptRoot "license-notice.txt"
+$gateCode = -1
+$warnLevel = "0"
+$notice = "TallyDues could not check its license. Please reinstall TallyDues or contact OpenXpert Solutions."
 try {
-    $lcPath = Join-Path $ScriptRoot "LicenseCommon.ps1"
-    if (-not (Test-Path -LiteralPath $lcPath)) { throw "LicenseCommon.ps1 is missing." }
-    . $lcPath
-    $gate = Test-TDV2LicenseGate -Root $ScriptRoot
-    if ($gate.Blocked) { $blockReason = [string]$gate.Reason }
+    if (Test-Path -LiteralPath $noticeFile) { Remove-Item -LiteralPath $noticeFile -Force }
+    $gateArgs = 'check --install-dir "' + $ScriptRoot + '" --out "' + $noticeFile + '"'
+    $gateCode = (Start-Process -FilePath $helper -ArgumentList $gateArgs -WindowStyle Hidden -Wait -PassThru).ExitCode
+    $noticeLines = [IO.File]::ReadAllLines($noticeFile)
+    $warnLevel = $noticeLines[0]
+    $notice = $noticeLines[1]
 } catch {
-    $blockReason = "License check could not run (" + $_.Exception.Message + ") Please reinstall TallyDues or contact OpenXpert Solutions."
+    $gateCode = -1
+    Write-TDLog ("license check could not run: " + $_)
 }
-if ($blockReason -ne "") {
-    Write-TDLog ("LICENSE BLOCK: " + $blockReason)
-    if (Show-Anything "TallyDues - License issue" $blockReason "general") { exit 3 } else { exit 4 }
+if ($gateCode -ne 0) {
+    Write-TDLog ("LICENSE BLOCK: code " + $gateCode)
+    # 10 = the license ended: look for a renewal in the background (rate-limited by the helper).
+    $noticeType = "general"
+    if ($gateCode -eq 10) {
+        $noticeType = "renew"
+        try { Start-Process -FilePath $helper -ArgumentList ('renew-check --install-dir "' + $ScriptRoot + '"') -WindowStyle Hidden } catch { Write-TDLog ("renewal check could not start: " + $_) }
+    }
+    if ($NoToast) { exit 4 }
+    if (Show-Anything "TallyDues - License" $notice $noticeType) { exit 3 } else { exit 4 }
 }
 
-if ($NoToast) { Write-TDLog "licensed, -NoToast: nothing shown by design"; exit 0 }
+$warned = ($warnLevel -ne "0")
+if ($warned -and -not $NoToast) { $null = Show-Anything "TallyDues - License" $notice "renew" }
 
-if (Show-Anything $Title $Message $ToastType) { exit 0 } else { exit 2 }
+if ($NoToast) {
+    Write-TDLog "licensed, -NoToast: nothing shown by design"
+    if ($warned) { exit 5 } else { exit 0 }
+}
+
+if (Show-Anything $Title $Message $ToastType) {
+    if ($warned) { exit 5 } else { exit 0 }
+} else { exit 2 }

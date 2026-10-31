@@ -7,6 +7,9 @@
 #                                   TDV2Toast.vbs, and record it in
 #                                   snooze.json for the Dashboard snooze board.
 #                                   Does NOT touch TallyPrime.
+#   tallydues://renew             : open the portal (its address is fixed inside
+#                                   TallyDuesLicense.exe, never taken from the link)
+#                                   and start the background renewal check.
 #   any other tallydues://...     : bring TallyPrime to the foreground.
 # HARDENED: ignores anything that is not a tallydues:// link, never throws,
 # always exits 0 (a failing click handler must never show an error).
@@ -77,8 +80,12 @@ function Invoke-Snooze([int]$Days, [string]$Id) {
         if (@("pdc", "invoice") -notcontains $typ) { throw "bad type" }
         $msg = ($l[2] -replace '"', "'").Trim()
         $when = (Get-Date).AddDays($Days)
+        # The task names only the id, so customer text stays out of Task Scheduler.
+        $sdir = Join-Path $PSScriptRoot "pending\snoozed"
+        if (-not (Test-Path -LiteralPath $sdir)) { New-Item -ItemType Directory -Path $sdir -Force | Out-Null }
+        Move-Item -LiteralPath $pf -Destination (Join-Path $sdir ($Id + ".txt")) -Force
         $vbs = Join-Path $PSScriptRoot "TDV2Toast.vbs"
-        $arg = '//B //Nologo "' + $vbs + '" TallyDues ' + $typ + ' Snoozed reminder: ' + $msg
+        $arg = '//B //Nologo "' + $vbs + '" TallyDues snoozed ' + $Id
         $act = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $arg
         $trg = New-ScheduledTaskTrigger -Once -At $when
         $trg.EndBoundary = $when.AddDays(30).ToString("s")
@@ -104,7 +111,7 @@ function Invoke-Snooze([int]$Days, [string]$Id) {
                 UntilKey = $when.ToString("yyyyMMdd", $Inv)
             }
             Update-SnoozeBoard $entry
-            Write-TDLog ("snooze board updated: " + $kind + " " + $items)
+            Write-TDLog ("snooze board updated: " + $kind)
         } catch { Write-TDLog ("snooze board not updated: " + $_) }
     } catch {
         Write-TDLog ("snooze failed " + $Id + ": " + $_)
@@ -112,10 +119,32 @@ function Invoke-Snooze([int]$Days, [string]$Id) {
     }
 }
 
+# Opens the portal, then keeps asking it for a later end date until one arrives.
+# The task waits for a network, so connecting the PC is enough for it to continue.
+function Invoke-Renew {
+    try {
+        $helper = Join-Path $PSScriptRoot "TallyDuesLicense.exe"
+        $run = Start-Process -FilePath $helper -ArgumentList "open-renewal" -WindowStyle Hidden -Wait -PassThru
+        if ($run.ExitCode -ne 0) { throw ("could not open the portal (code " + $run.ExitCode + ")") }
+        $act = New-ScheduledTaskAction -Execute $helper -Argument ('renew-check --force --install-dir "' + $PSScriptRoot + '"')
+        $trg = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 14)
+        $set = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName "TallyDues-RenewCheck" -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
+        Write-TDLog "renewal check scheduled"
+    } catch {
+        Write-TDLog ("renew failed: " + $_)
+        try { [void](New-Object -ComObject WScript.Shell).Popup("TallyDues could not start the renewal. Please renew on the OpenXpert portal. Details are in toast.log.", 15, "TallyDues", 48) } catch { }
+    }
+}
+
 try {
     if ($Uri -notlike "tallydues://*") { exit 0 }
     if ($Uri -match '^tallydues://snooze/(1|3)/([0-9a-f]{12})/?$') {
         Invoke-Snooze ([int]$Matches[1]) $Matches[2]
+        exit 0
+    }
+    if ($Uri -match '^tallydues://renew/?$') {
+        Invoke-Renew
         exit 0
     }
     Add-Type -TypeDefinition @"

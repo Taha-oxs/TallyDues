@@ -1,123 +1,65 @@
----
-title: "TallyDues - Build and Release Guide"
-subtitle: "How to turn the packages into Setup programs and release them"
-author: "OpenXpert Solutions"
-date: "22 October 2026"
----
-
 # TallyDues - Build and Release Guide
 
-**Audience:** the maintainer at OpenXpert Solutions.\
-**Covers:** the Public Beta installer (`TallyDues-PublicBeta-Setup.exe`) and the Production installer (`TallyDues-Store-Setup.exe`).\
-**Companion documents:** *TallyDues - License Generator Guide*, *TallyDues - System Design*, *TallyDues - Code Documentation*
+**Audience:** the maintainer at OpenXpert Solutions.
 
-> **Status.** The Setup programs are built on Windows by an Inno Setup compiler, which is not available where these packages were prepared. The two installer scripts and the GitHub workflows have therefore **never been compiled by the preparer**. Compiling them is your first test (section 3.4). Everything else in the packages was parse-checked and the install scripts were run on Linux PowerShell 7.\
-> **This folder** is the complete Production (licensed) repository: workflow, installer with its `.bmp` images, add-on and guides. `dev-tools` (which creates licenses) is delivered separately and must never be added to the repository.\
-> **Signing key.** This Production package was rebuilt from the written specification, because the original Store files were not available. It carries a **new** signing key (section 2, step 1). Licenses signed with an older key will not verify with it.
-
-## 1. What you have
-
-| File | Contains | Output |
+| Build | Where | Result |
 |---|---|---|
-| `TallyDues-Store-Package` (this folder) | `.github/workflows/build-store.yml`, `installer-store/`, `TallyDuesStore/`, `HOW-TO-GET-YOUR-EXE.txt` | `TallyDues-Store-Setup.exe` (needs a signed license per customer) |
-| `TallyDues-Store-dev-tools.zip` (separate, private) | `dev-tools/`: `Stamp-For-Customer.ps1`, `LicenseCommon.ps1`, `README.txt` | `.lic` files |
-| The Public Beta package (separate) | `.github/workflows/build-public-beta.yml`, `installer/`, `TallyDuesPublicBeta/` | `TallyDues-PublicBeta-Setup.exe` (15-day trial, no license) |
+| Test | GitHub Actions, on every push | Unsigned `TallyDues-Setup.exe` with placeholders. It installs nothing, because it reports "not configured" for any key. |
+| Release | Your own PC, `build\Build-Release.ps1` | Signed `TallyDues-Setup.exe`. Your certificate never goes to GitHub. |
 
-Both installers install to `C:\ProgramData\TallyDues` with no administrator prompt. They have **different installer identities** so each can be updated independently, but they share one install folder, so **do not install both on the same PC**.
+## 1. Run the tests
 
-## 2. Before the first build
+```
+powershell -ExecutionPolicy Bypass -File build\Run-Tests.ps1
+```
 
-1. **Decide the signing key and back it up.** `LicenseCommon.ps1` holds `$Script:TDV2LicenseKey`. This package contains a freshly generated key. If you have already issued licenses with a different key, paste that key into **both** copies (`dev-tools\` and `TallyDuesStore\Scripts\`) before building; otherwise keep this one. Either way keep the copies byte-identical and keep a private backup of the key: rotating it later invalidates every license already issued. See the *License Generator Guide*, section 8.
-2. **Keep `dev-tools` out of the repository.** It creates licenses. It is not part of this folder; keep it on your own PC.
-3. Decide whether to buy a code-signing certificate. Without one, Windows SmartScreen may show "Windows protected your PC" for new downloads (users choose **More info > Run anyway**).
+These compile the license helper with the compiler built into Windows and run it against a local mock portal. They do not touch a real portal or `C:\ProgramData\TallyDues`.
 
-## 3. Building a Setup program with GitHub Actions
+## 2. Compile the add-on
 
-GitHub Actions provides a Windows machine that has (or installs) Inno Setup. You do not need Inno Setup on your own PC.
+1. Open `TallyDues\TallyDues.tdl` as a project in TallyPrime Developer.
+2. In **File > Active Project Properties > Build Options**, set **TCP format** to **Inscribed V1**. Inscribed V2 needs TallyPrime Release 7.2, so it would drop customers on 7.0 and 7.1.
+3. Leave **Authorisation required** off, so one file works for every customer. The license helper handles licensing.
+4. Click **Save and Build**, and put the result at `TallyDues\TallyDues.tcp`.
 
-### 3.1 One-time: a repository
+Setup ships `TallyDues.tcp` when it exists. Rebuild it after every change to `TallyDues.tdl`.
 
-Create a GitHub repository (a private one is fine). You can use one repository per build, or one for both, as long as the folders do not collide.
+## 3. Build a release
 
-### 3.2 Upload the contents
+You need:
 
-1. Put the **contents** of the Production folder at the top of the repository, including the hidden `.github` folder. The simplest way is git (`git init`, `git add -A`, `git commit`, `git remote add origin <url>`, `git push -u origin main`), which keeps `.github`. In the browser use **Add file > Upload files**; GitHub does **not** unpack `.zip` files, and if the browser skips `.github`, create `.github/workflows/build-store.yml` with **Add file > Create new file** and paste the file's contents in.
-2. After the upload this must exist at the top of the repository:
+- Inno Setup 6 installed in its default folder.
+- `signtool.exe` from the Windows SDK.
+- Your code-signing certificate file.
+- The portal's live URL and Ed25519 public key (base64), from the portal team.
 
-| Build | Required at the top of the repository |
-|---|---|
-| Public Beta | `.github/workflows/build-public-beta.yml`, `installer/`, `TallyDuesPublicBeta/` |
-| Production | `.github/workflows/build-store.yml`, `installer-store/`, `TallyDuesStore/` |
+```
+powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PortalUrl https://your-portal -PublicKey <base64> -CertificatePath C:\path\to\cert.pfx
+```
 
-3. Commit the upload.
+The script asks for the certificate password. It stops if the URL or key is missing or wrong, if `TallyDues.tcp` is missing, if the TDL is not ASCII, or if a test fails. It then signs the license helper, Setup and the uninstaller.
 
-### 3.3 The build
+The output is `installer\Output\TallyDues-Setup.exe`.
 
-The workflow starts by itself on every push, and can be started by hand (Actions tab > the workflow > Run workflow). It takes about 2 minutes. It checks out the code, uses Inno Setup (installing it with Chocolatey if the runner does not have it), compiles the `.iss` file, and publishes the Setup program as an artifact.
+## 4. Before you release
 
-| Build | Workflow name | Artifact to download | File inside |
-|---|---|---|---|
-| Public Beta | Build TallyDues public beta installer | `TallyDues-PublicBeta-Setup` | `TallyDues-PublicBeta-Setup.exe` |
-| Production | Build TallyDues licensed installer | `TallyDues-Store-Setup` | `TallyDues-Store-Setup.exe` |
+Run the `test-matrix` skill's cases on a clean Windows PC with a licensed TallyPrime, and a real test key from the portal. See `docs\Portal-Team-Requests.md` for what the portal must provide first.
 
-When the run shows a green tick, open it and download the artifact (a zip containing the `.exe`).
-
-### 3.4 First-build checks (not yet done anywhere)
-
-If the run fails, open the failed step; the Inno compiler prints the line number. The usual causes are a file missing from the upload (often the hidden `.github` folder, or `installer\*.bmp`), or a folder uploaded one level too deep. Send the log text and the script can be corrected.
-
-## 4. Smoke test before you release (Windows 10/11 64-bit with TallyPrime Release 7+)
-
-1. **Remove any earlier TallyDue/TallyDues** (section 6).
-2. Run the new Setup. **Production:** browse to a test `.lic`; try an edited and an expired file first, both must be refused with a reason.
-3. Finish Setup; in TallyPrime load the `.tdl` from `C:\ProgramData\TallyDues` (F1 > TDL and Add-On > F4 > Load on startup Yes > browse > Ctrl+A), restart.
-4. A welcome notification appears when TallyPrime starts; its text points to the three TallyDues items on the Gateway of Tally menu.
-5. Gateway of Tally > **TallyDues Run Check**: notifications appear for real PDCs and invoices.
-6. Dashboard and Settings open from the menu; "NO DUES" shows for an empty list; Settings are editable and Ctrl+A saves.
-7. **Snooze.** Open the Dashboard before snoozing anything: it must open and show "Nothing snoozed". Then click **Snooze 3 days** on a cheque or invoice notification and reopen the Dashboard: a row appears under SNOOZED REMINDERS with the item count, "Snoozed for 3 days" and the date. `toast.log` shows `snooze board updated`, `C:\ProgramData\TallyDues\snooze.json` exists, and `Get-ScheduledTask TallyDues-Snooze-*` lists the reminder.
-8. Start Menu > TallyDues > Alerts > "also show pop-up boxes": pop-ups appear.
-9. **Production:** Update License with a new `.lic`; set the PC date past the end date (alert replaced by the expired notice); delete `license.lic` (blocked).
-10. Uninstall and confirm `C:\ProgramData\TallyDues` is gone and `Get-ScheduledTask TallyDues-Snooze-*` returns nothing.
-
-The full checklist is in *System Design*, section 15.
-
-## 5. Releasing
-
-- **Public Beta:** give testers `TallyDues-PublicBeta-Setup.exe` and the user guide. Each install starts its own 15-day trial. The trial end date is written to `expiry.txt` at install time; re-running Setup starts another 15 days (acceptable for a "not final" beta).
-- **Production:** give each customer `TallyDues-Store-Setup.exe` (the same file for everyone) and their own `.lic` made with `Stamp-For-Customer.ps1`.
-- Name each release in your own records (date and installer file size) so you can tell testers which build they have.
-- Customers need Windows 10/11 64-bit, TallyPrime Release 7 or later, and no administrator rights.
-
-## 6. Upgrading from the earlier "TallyDue" (before the rename)
-
-The product was renamed from TallyDue to **TallyDues**. The new Setup programs use new installer identities and install to `C:\ProgramData\TallyDues`, so they do **not** replace the old install. On a PC that has the old version:
-
-1. Uninstall the old one: Start Menu > TallyDue > Uninstall TallyDue (or Windows Settings > Apps).
-2. In TallyPrime: F1 > TDL and Add-On > F4 and remove the old `TallyDue...tdl` entry.
-3. Install the new Setup and load the new `.tdl` from `C:\ProgramData\TallyDues`.
-
-Two add-ons loaded at once would both react to the same events, so remove the old one before loading the new one.
-
-## 7. Maintenance quick reference
+## 5. Maintenance
 
 | Task | How |
 |---|---|
-| Change a message | Edit the string in the `.tdl` (ASCII only), re-upload, rebuild. |
-| Change graphics | Replace the files in `branding\` and the `.bmp` files under `installer*\` (same names and sizes; the original `.jpg` art is in `installer\art`), rebuild. |
-| Issue or renew a license | *License Generator Guide*. |
-| Rebuild without changing files | GitHub > Actions > the workflow > Run workflow. |
-| Rotate the signing key | Both `LicenseCommon.ps1` copies, rebuild, re-issue every license. |
+| Change a message | Edit the string in `TallyDues.tdl` (ASCII only), recompile the `.tcp`, rebuild. |
+| Change graphics | Replace the files in `TallyDues\Scripts\branding\` and the `.bmp` files in `installer\` (same names and sizes), rebuild. |
+| Portal URL or key changes | Rebuild with the new values. Old installs keep their signed license, but cannot renew until updated. |
 
-## 8. Troubleshooting a release
+## 6. Troubleshooting a build
 
 | Symptom | Likely cause and action |
 |---|---|
-| The workflow does not start | The `.github` folder was not uploaded, or the zip was uploaded instead of its contents. |
-| "Workflow file not found" or an empty Actions tab | Same as above: upload the unzipped contents including the hidden folder. |
-| Inno reports a missing file | A folder was uploaded one level too deep, or `installer\*.bmp` is missing. |
-| SmartScreen warning on the Setup | Expected for an unsigned program: More info > Run anyway; or sign the installer. |
-| The customer's Setup refuses the license | Read the reason on the License page; see the *License Generator Guide*, section 6.1. |
-| Alerts do not appear after install | Check `toast.log` and `install.log` in `C:\ProgramData\TallyDues`; try the pop-up alert style; see the user guide's troubleshooting table. |
-| Snooze button does nothing | See the user guide's troubleshooting table; look for `snooze` lines in `toast.log`. |
+| Inno reports a missing `TallyDuesLicense.exe` | Run `build\Build-Helper.ps1` first. `Build-Release.ps1` and the workflow do this for you. |
+| "A release build needs TallyDues\TallyDues.tcp" | Do section 2. |
+| Customer's Setup says "test build" | They have a build from GitHub Actions, not a release. |
+| Alerts do not appear after install | Check `toast.log` and `install.log` in `C:\ProgramData\TallyDues`, and try the pop-up alert style. |
 
 *Developed by OpenXpert Solutions.*

@@ -1,6 +1,7 @@
 TallyDues is installed - everything that can be done for you automatically
 already has been (license checked and stored, files copied, notification
-engine registered, alert timeframe saved). Nothing else needs running.
+engine registered). Nothing else needs running. From now on TallyDues works
+without internet until your license end date.
 Setup details are logged to C:\ProgramData\TallyDues\install.log.
 
 ONE step still has to happen INSIDE TallyPrime - no Windows installer can
@@ -9,35 +10,31 @@ It takes about 10 seconds, once, on this PC:
 
   1. Open TallyPrime.
   2. Press F1 (Help) -> TDL and Add-On -> F4 (Manage Local TDL Files).
-  3. Set "Load on startup" to Yes, then Browse to TallyDues-Store-v1.0.tdl
+  3. Set "Load on startup" to Yes, then Browse to the TallyDues file
      in C:\ProgramData\TallyDues, and press Ctrl+A to accept.
   4. RESTART TallyPrime completely (close and reopen). A "Welcome to
-     TallyDues" notification appears and shows your license end date.
+     TallyDues" notification appears.
   5. Open the company you want TallyDues to watch. At the Gateway of
      Tally screen you now have three TallyDues menu items:
        TallyDues Run Check   check what is due now (Windows notifications)
        TallyDues Dashboard   list of due cheques/PDCs and invoices, plus
                              the reminders you have snoozed
-       TallyDues Settings    change the alert timeframe
+       TallyDues Settings    change the alert timeframe (7 days back and
+                             ahead until you change it)
 
 Cheque and invoice notifications have "Snooze 1 day" and "Snooze 3 days"
 buttons: click one and the same reminder comes back when the time is up.
 
-RENEWING YOUR LICENSE: Start Menu > TallyDues > Update License, choose the
-new .lic file you received. Nothing else changes; restart TallyPrime if it
-is open.
-
-EARLIER VERSION CALLED "TallyDue"? The app is now named TallyDues and
-installs to its own folder (C:\ProgramData\TallyDues). Remove the old one
-first, so TallyPrime does not load two copies of the same add-on:
-Start Menu > TallyDue > Uninstall TallyDue, then in TallyPrime
-F1 > TDL and Add-On > F4 delete the old TallyDue .tdl line (Ctrl+A).
+RENEWING YOUR LICENSE: TallyDues warns you before your license ends. Click
+Renew on the notification and renew on the OpenXpert portal in your browser.
+Once this PC is online, TallyDues finds the renewal by itself. Your key stays
+the same.
 
 NOT SEEING NOTIFICATIONS? Windows may be hiding them (Do Not Disturb /
 Focus Assist, or notifications turned off for "Windows PowerShell").
 Start Menu > TallyDues > "Alerts - also show pop-up boxes" makes every
 alert also appear as a pop-up box.
 
-The user guide is in Start Menu > TallyDues > User Guide (PDF).
+The user guide is in Start Menu > TallyDues > User Guide.
 
 Developed by OpenXpert Solutions

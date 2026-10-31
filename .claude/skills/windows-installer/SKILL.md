@@ -1,42 +1,35 @@
 ---
 name: windows-installer
-description: Compare installer options and design or change the TallyDue Windows setup, including the custom License Key page, Inno Setup scripts, code signing, upgrades and uninstall. Use before building or changing anything related to Setup.exe, Install-TallyDue.ps1 or the uninstall scripts.
+description: Design or change the TallyDues Windows setup, including the License Key page, Inno Setup script, code signing, upgrades and uninstall. Use before building or changing anything related to Setup.exe, Install-TallyDues.ps1 or the uninstall scripts.
 ---
 
 # Windows installer
 
-Compare options before building. Default to Inno Setup unless a requirement rules it out.
+Setup is Inno Setup: `installer\TallyDues-Setup.iss`. `TallyDues\Install-TallyDues.ps1` is the logic Setup runs silently after copying files.
 
-| Option | License Key page | Fit |
-|---|---|---|
-| **Inno Setup** | Built in: `CreateInputQueryPage`, or `UserInfoPage` with `CheckSerial` | Best fit. The shipped uninstaller (`unins000.exe`) is already Inno. |
-| WiX / MSI | Custom dialog authoring, much more work | Only if a customer needs MSI or Group Policy deployment |
-| NSIS | nsDialogs custom page | Workable, but no benefit over Inno here |
-| PowerShell only | Hand-built WinForms | Avoid: SmartScreen, execution policy and no real uninstall entry |
+## Builds
 
-## Before starting
-
-- The `.iss` source is **not** in this folder and the Inno compiler was not found on this PC. Ask for the source; do not rebuild it by guesswork.
-- Treat `Install-TallyDue.ps1` as the install logic that Setup runs silently.
+- **Test:** `.github\workflows\build.yml`, unsigned, with placeholders. It cannot activate a key.
+- **Release:** `build\Build-Release.ps1` on the user's PC, because the certificate never goes to GitHub. See `TallyDues-Build-and-Release-Guide.md`.
+- Inno Setup is not installed on this PC, so the `.iss` can only be compiled by the workflow, or after the user installs it.
 
 ## Design rules
 
-- Validate the key format on the page, and verify the signed server response in the same code the app uses. See the `license-security` skill. The installer is never the only license check.
-- Handle no internet, server errors and bad keys with distinct messages. Never leave a half-finished install.
-- Pass the key to scripts by a temp file with restricted access, not on the command line, where it can be seen and logged.
-- Do not store API secrets in `[Code]`: Inno scripts can be extracted from a Setup.exe.
-- Sign both Setup.exe and the uninstaller with `SignTool`, or SmartScreen will warn customers.
-- Set `AppId` once and never change it, so upgrades replace the old install.
+- The License Key page checks format locally, then runs the helper. See the `license-security` skill. Setup holds no license logic beyond mapping exit codes to messages.
+- Handle no internet, server errors and bad keys with distinct messages. Never leave a half-finished install: a cancelled `confirm` runs the uninstaller.
+- Pass the key to the helper by a temp file, not on the command line.
+- Do not store secrets in `[Code]`: Inno scripts can be extracted from a Setup.exe.
+- Sign Setup, the uninstaller and `TallyDuesLicense.exe`.
+- Keep `AppId` unchanged, so reinstalls replace the old install.
+- Nothing is stamped into the add-on, because the `.tcp` cannot be changed. Anything per-install goes in a file the TDL reads, like `license-status.json`.
 
 ## Pitfalls in this project
 
-- **Elevation:** `HKCU` protocol registration lands in the wrong profile if an admin elevates from another account. Test this case, or register per machine.
-- **Wrong TDL:** `Install-TallyDue.ps1` picks the first `TallyDue*.tdl`, so with several versions in the folder it can stamp an old one. Pass `-TdlSource` explicitly.
-- **Mixed names:** `TallyDue` and `TallyDues` coexist across files, folders and link handlers (`tallydue://` and `tallydues://`). `Install-TallyDue.ps1` registers only the old one. Upgrades must clean up both.
-- **Stamping:** it rewrites the TDL in place, which cannot work once the TDL is compiled. Move stamped values to a config file the TDL reads.
-- **Uninstall:** the scripts delete `InstallDir`, so user data such as `snooze.json` goes too. Source lives in this repo; only test installs go in `C:ProgramDataTallyDue`, so never make edits there.
-- **Reinstall:** every install starts a fresh trial (see `license-security`).
+- **Elevation:** `HKCU` protocol registration and DPAPI are per user, so an admin elevating from another account breaks them. Multiple accounts are unsupported in the first release.
+- **Fixed path:** the add-on holds `C:\ProgramData\TallyDues\TDV2Toast.vbs`, so `Install-TallyDues.ps1` refuses any other folder.
+- **Uninstall:** the script deletes `InstallDir`, so `snooze.json` goes too. Seat release runs first because it needs `license.dat`.
+- **TDL list:** Setup cannot add or remove the add-on in TallyPrime's F4 list, so the user does that.
 
 ## Definition of done
 
-Test fresh install, upgrade over each older name, repair, uninstall, a standard user, an elevated admin from another account, offline, and a path with spaces. Add results to the `test-matrix` skill's run log.
+Test fresh install, reinstall, cancelled and failed installs, uninstall, a standard user, and offline. Add results to the `test-matrix` skill's run log.

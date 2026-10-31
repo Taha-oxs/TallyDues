@@ -1,0 +1,373 @@
+// TallyDuesLicense.exe: the single place for license logic, used by Setup and the alert scripts.
+// It shows no window. Results are exit codes (see ExitCodes), plus --out text for "check".
+// The key is read from a file and is never written to a log or a command line.
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Web.Script.Serialization;
+
+namespace TallyDues.License
+{
+    internal static class ExitCodes
+    {
+        public const int Ok = 0;
+        public const int Usage = 2;
+        public const int Expired = 10;
+        public const int NoLicense = 11;
+        public const int ClockBack = 12;
+        public const int OtherMachine = 13;
+        public const int InvalidKey = 20;
+        public const int KeyExpired = 21;
+        public const int Revoked = 22;
+        public const int Suspended = 23;
+        public const int LimitReached = 24;
+        public const int RateLimited = 25;
+        public const int Network = 30;
+        public const int BadResponse = 31;
+        public const int NotConfigured = 32;
+        public const int NoChange = 40;
+    }
+
+    internal static class Program
+    {
+        private const string RenewTask = "TallyDues-RenewCheck";
+        private static readonly TimeSpan RetryGap = TimeSpan.FromMinutes(10);
+
+        private static int Main(string[] args)
+        {
+            return Guarded(args);
+        }
+
+        internal static int Guarded(string[] args)
+        {
+            try
+            {
+                return Run(args);
+            }
+            catch (PortalException e)
+            {
+                return e.ExitCode;
+            }
+            catch (Exception)
+            {
+                return ExitCodes.NoLicense;
+            }
+        }
+
+        internal static int Run(string[] args)
+        {
+            if (args.Length == 0) return ExitCodes.Usage;
+            var options = ReadOptions(args);
+            string dir = Option(options, "install-dir", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "TallyDues"));
+            switch (args[0])
+            {
+                case "validate": return Validate(options);
+                case "confirm": return Confirm(options, dir);
+                case "check": return Check(options, dir);
+                case "renew-check": return RenewCheck(options, dir);
+                case "release": return Release(dir);
+                case "open-renewal": return OpenRenewal();
+                default: return ExitCodes.Usage;
+            }
+        }
+
+        // Read-only check before installing. Keeps the confirm token in a temp state file.
+        private static int Validate(Dictionary<string, string> options)
+        {
+            string key = ReadKey(options);
+            if (key == null) return ExitCodes.InvalidKey;
+            string[] machine = Machine.Components();
+            string random = NewRandom();
+            string nonce = Machine.Nonce(machine, random);
+            SignedAnswer answer = Portal.Post("/api/v1/tally/validate", Request("key", key, machine, nonce), nonce);
+            string token = Portal.AsString(answer.Payload, "confirm_token");
+            if (token.Length != 48) return ExitCodes.BadResponse;
+            File.WriteAllText(options["state"], token, Encoding.ASCII);
+            return ExitCodes.Ok;
+        }
+
+        // Takes the seat after a successful install and stores the signed license.
+        private static int Confirm(Dictionary<string, string> options, string dir)
+        {
+            string key = ReadKey(options);
+            if (key == null) return ExitCodes.InvalidKey;
+            string[] machine = Machine.Components();
+            string token = File.ReadAllText(options["state"], Encoding.ASCII).Trim();
+            string random = NewRandom();
+            string nonce = Machine.Nonce(machine, random);
+            SignedAnswer answer;
+            try
+            {
+                answer = Portal.Post("/api/v1/tally/confirm", Request("confirm_token", token, machine, nonce), nonce);
+            }
+            catch (PortalException e)
+            {
+                // The token lasts 30 minutes and works once. An old token reports invalid_key.
+                if (e.ExitCode != ExitCodes.InvalidKey) throw;
+                int validated = Validate(options);
+                if (validated != ExitCodes.Ok) return validated;
+                token = File.ReadAllText(options["state"], Encoding.ASCII).Trim();
+                answer = Portal.Post("/api/v1/tally/confirm", Request("confirm_token", token, machine, nonce), nonce);
+            }
+            var store = new LicenseStore(dir);
+            var license = new LicenseFile
+            {
+                KeyProtected = LicenseStore.Protect(key),
+                Components = machine,
+                Random = random,
+                PayloadRaw = answer.PayloadRaw,
+                Signature = answer.Signature
+            };
+            store.Save(license);
+            ClearWarnings(store);
+            store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()));
+            return ExitCodes.Ok;
+        }
+
+        // Local gate, run before every alert. Makes no network call.
+        private static int Check(Dictionary<string, string> options, string dir)
+        {
+            var store = new LicenseStore(dir);
+            string warnLevel = "0";
+            string message;
+            int result = Evaluate(store, out warnLevel, out message);
+            string outPath = Option(options, "out", null);
+            if (outPath != null) File.WriteAllText(outPath, warnLevel + "\r\n" + message, Encoding.ASCII);
+            return result;
+        }
+
+        private static int Evaluate(LicenseStore store, out string warnLevel, out string message)
+        {
+            warnLevel = "0";
+            LicenseFile license = store.Load();
+            if (license == null || !license.IsAuthentic())
+            {
+                message = "TallyDues has no valid license on this PC. Please reinstall TallyDues and enter your license key.";
+                store.WriteStatus("No valid license");
+                return ExitCodes.NoLicense;
+            }
+            if (!Machine.IsSameMachine(license.Components, Machine.Components()))
+            {
+                message = "This TallyDues license belongs to a different PC. Please reinstall TallyDues and enter your license key.";
+                store.WriteStatus("License belongs to a different PC");
+                return ExitCodes.OtherMachine;
+            }
+            Dictionary<string, string> state = store.LoadState();
+            DateTime today = Now().Date;
+            DateTime lastSeen;
+            string seen;
+            // One day of tolerance, so that a time zone change does not block anyone.
+            if (state.TryGetValue("LASTSEEN", out seen)
+                && DateTime.TryParseExact(seen, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out lastSeen)
+                && today < lastSeen.AddDays(-1))
+            {
+                message = "The Windows date on this PC looks wrong, so TallyDues has paused its alerts. Please correct the date and time.";
+                return ExitCodes.ClockBack;
+            }
+            if (!state.ContainsKey("LASTSEEN") || string.CompareOrdinal(today.ToString("yyyyMMdd", CultureInfo.InvariantCulture), state["LASTSEEN"]) > 0)
+            {
+                state["LASTSEEN"] = today.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            }
+            DateTimeOffset end = license.ValidUntil();
+            string endText = ShowDate(end);
+            if (new DateTimeOffset(Now()) > end)
+            {
+                store.SaveState(state);
+                store.WriteStatus("License ended on " + endText);
+                message = "Your TallyDues license ended on " + endText + ", so alerts have stopped. Click Renew to renew it.";
+                return ExitCodes.Expired;
+            }
+            double days = (end - new DateTimeOffset(Now())).TotalDays;
+            warnLevel = NextWarning(state, end, days);
+            store.SaveState(state);
+            store.WriteStatus("License valid until " + endText);
+            message = warnLevel == "0"
+                ? "OK"
+                : "Your TallyDues license ends on " + endText + ". Click Renew to keep your alerts.";
+            return ExitCodes.Ok;
+        }
+
+        // Each warning (14, 7 and 1 days before the end) shows once per end date.
+        private static string NextWarning(Dictionary<string, string> state, DateTimeOffset end, double days)
+        {
+            string level = days <= 1 ? "1" : days <= 7 ? "7" : days <= 14 ? "14" : "0";
+            if (level == "0") return "0";
+            string endKey = end.UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            string shownFor, shownLevel;
+            if (state.TryGetValue("WARN_FOR", out shownFor) && shownFor == endKey
+                && state.TryGetValue("WARN_LEVEL", out shownLevel)
+                && int.Parse(shownLevel, CultureInfo.InvariantCulture) <= int.Parse(level, CultureInfo.InvariantCulture))
+            {
+                return "0";
+            }
+            state["WARN_FOR"] = endKey;
+            state["WARN_LEVEL"] = level;
+            return level;
+        }
+
+        // Asks the portal for a later end date. Only a signed, later date changes anything.
+        private static int RenewCheck(Dictionary<string, string> options, string dir)
+        {
+            var store = new LicenseStore(dir);
+            LicenseFile license = store.Load();
+            if (license == null || !license.IsAuthentic()) return ExitCodes.NoLicense;
+            Dictionary<string, string> state = store.LoadState();
+            string last;
+            long ticks;
+            if (!options.ContainsKey("force") && state.TryGetValue("LAST_TRY", out last)
+                && long.TryParse(last, out ticks) && Now() - new DateTime(ticks) < RetryGap)
+            {
+                return ExitCodes.NoChange;
+            }
+            state["LAST_TRY"] = Now().Ticks.ToString(CultureInfo.InvariantCulture);
+            store.SaveState(state);
+
+            string key = LicenseStore.Unprotect(license.KeyProtected);
+            string[] machine = Machine.Components();
+            string random = NewRandom();
+            string nonce = Machine.Nonce(machine, random);
+            SignedAnswer answer = Portal.Post("/api/v1/tally/heartbeat", Request("key", key, machine, nonce), nonce);
+            var renewed = new LicenseFile
+            {
+                KeyProtected = license.KeyProtected,
+                Components = machine,
+                Random = random,
+                PayloadRaw = answer.PayloadRaw,
+                Signature = answer.Signature
+            };
+            if (renewed.ValidUntil() <= license.ValidUntil()) return ExitCodes.NoChange;
+
+            store.Save(renewed);
+            ClearWarnings(store);
+            string endText = ShowDate(renewed.ValidUntil());
+            store.WriteStatus("License valid until " + endText);
+            RemoveRenewTask();
+            if (!options.ContainsKey("quiet")) ShowRenewed(dir, endText);
+            return ExitCodes.Ok;
+        }
+
+        // Frees this machine's seat. The caller tells the user if the portal cannot be reached.
+        private static int Release(string dir)
+        {
+            LicenseFile license = new LicenseStore(dir).Load();
+            if (license == null) return ExitCodes.Ok;
+            string key;
+            try
+            {
+                key = LicenseStore.Unprotect(license.KeyProtected);
+            }
+            catch (CryptographicException)
+            {
+                return ExitCodes.NoLicense;
+            }
+            string[] machine = Machine.Components();
+            string nonce = Machine.Nonce(machine, NewRandom());
+            Portal.Post("/api/v1/tally/release", Request("key", key, machine, nonce), nonce);
+            return ExitCodes.Ok;
+        }
+
+        // The address is fixed at build time and never taken from a link.
+        private static int OpenRenewal()
+        {
+            if (!Config.IsConfigured) return ExitCodes.NotConfigured;
+            Process.Start(new ProcessStartInfo(Config.PortalUrl.TrimEnd('/') + "/portal") { UseShellExecute = true });
+            return ExitCodes.Ok;
+        }
+
+        private static void ShowRenewed(string dir, string endText)
+        {
+            string bridge = Path.Combine(dir, "TDV2Toast.vbs");
+            if (!File.Exists(bridge)) return;
+            string arguments = "//B //Nologo \"" + bridge + "\" TallyDues general Your TallyDues license is renewed until " + endText + ". Alerts are back on.";
+            Process.Start(new ProcessStartInfo("wscript.exe", arguments) { UseShellExecute = false, CreateNoWindow = true });
+        }
+
+        private static void RemoveRenewTask()
+        {
+#if !TEST_BUILD
+            try
+            {
+                using (Process process = Process.Start(new ProcessStartInfo("schtasks.exe", "/Delete /TN " + RenewTask + " /F") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
+                {
+                    process.WaitForExit(10000);
+                }
+            }
+            catch (Exception)
+            {
+                // The task stops by itself after 14 days.
+            }
+#endif
+        }
+
+        private static void ClearWarnings(LicenseStore store)
+        {
+            Dictionary<string, string> state = store.LoadState();
+            state.Remove("WARN_FOR");
+            state.Remove("WARN_LEVEL");
+            store.SaveState(state);
+        }
+
+        private static Dictionary<string, object> Request(string credentialName, string credential, string[] machine, string nonce)
+        {
+            return new Dictionary<string, object>
+            {
+                { credentialName, credential },
+                { "machine", machine },
+                { "nonce", nonce },
+                { "installer_version", Config.Version }
+            };
+        }
+
+        private static string ReadKey(Dictionary<string, string> options)
+        {
+            string key = File.ReadAllText(options["key-file"], Encoding.ASCII).Trim().ToUpperInvariant();
+            return Regex.IsMatch(key, "^[0-9A-F]{4}(-[0-9A-F]{4}){7}$") ? key : null;
+        }
+
+        private static string NewRandom()
+        {
+            byte[] bytes = new byte[32];
+            using (var random = RandomNumberGenerator.Create()) random.GetBytes(bytes);
+            return string.Concat(bytes.Select(b => b.ToString("x2")));
+        }
+
+        private static string ShowDate(DateTimeOffset date)
+        {
+            return date.LocalDateTime.ToString("dd-MMM-yyyy", CultureInfo.InvariantCulture);
+        }
+
+        private static DateTime Now()
+        {
+#if TEST_BUILD
+            string fake = Environment.GetEnvironmentVariable("TD_TEST_NOW");
+            if (!string.IsNullOrEmpty(fake)) return DateTime.Parse(fake, CultureInfo.InvariantCulture);
+#endif
+            return DateTime.Now;
+        }
+
+        private static Dictionary<string, string> ReadOptions(string[] args)
+        {
+            var options = new Dictionary<string, string>();
+            for (int i = 1; i < args.Length; i++)
+            {
+                if (!args[i].StartsWith("--")) continue;
+                string name = args[i].Substring(2);
+                bool hasValue = i + 1 < args.Length && !args[i + 1].StartsWith("--");
+                options[name] = hasValue ? args[++i] : "";
+            }
+            return options;
+        }
+
+        private static string Option(Dictionary<string, string> options, string name, string fallback)
+        {
+            string value;
+            return options.TryGetValue(name, out value) && value.Length > 0 ? value : fallback;
+        }
+    }
+}

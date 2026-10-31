@@ -1,54 +1,33 @@
 ---
 name: license-security
-description: Design and review the TallyDue side of licensing, including key entry, portal API calls, signed responses, machine identity, heartbeat, offline activation, grace periods and tamper resistance. Use before writing or changing any license, activation, trial or expiry code.
+description: Design and review the TallyDues side of licensing, including key entry, portal API calls, signed responses, machine identity, renewal checks and tamper resistance. Use before writing or changing any license, activation, trial or expiry code.
 ---
 
 # License and API security
 
-The design is decided in `docs/Subscription & License Management Portal Architecture.md`. Read its "Tally Dues license keys and activation" section first, and follow it. If code needs something different, raise it rather than quietly changing the design.
+The design is in `docs/License-Design.md`. Read it first and follow it. If code needs something different, raise it rather than quietly changing the design. Needs from the portal go in `docs/Portal-Team-Requests.md`; its team owns it.
 
 Be honest about the limit: the client can be patched. The design accepts this risk, aiming to stop key sharing and casual copying, not a determined cracker.
 
-## Client responsibilities
+## Fixed decisions
 
-- **Key:** 32 hex characters in eight groups of four. Never log it or put it on a command line.
-- **Install:** call `POST /v1/tally/validate` (changes nothing) before installing and `POST /v1/tally/confirm` after success. A failed or cancelled install must not take a seat.
-- **Uninstall:** call `POST /v1/tally/release`, or show a release code when offline.
-- **Heartbeat:** call `POST /v1/tally/heartbeat` on start and about every 7 days. Store the signed `valid_until`, and stop with a renewal message once it passes.
-- **Offline:** installation code, then a signed activation code bound to the key, machine hash and nonce, plus refresh and release codes.
-- **Signatures:** verify every response with the built-in Ed25519 public key and check the echoed nonce. Reject anything unsigned, or signed for another machine or nonce.
-- **Machine identity:** MachineGuid, CPU ID, motherboard serial and system disk serial, each salted and hashed on the machine. Send only hashes.
-- **Clock:** store the latest date seen, and refuse to run if the clock moves back.
-- **Errors:** handle `invalid_key`, `expired`, `revoked`, `subscription_suspended`, `limit_reached` and `rate_limited`, each with its own customer message.
-
-A short outage or days without internet must never stop a customer inside the grace period. A license failure must never crash or block TallyPrime itself.
-
-## Open design gaps
-
-Raise these before building the affected part:
-
-- **No app process:** the design assumes an "installed app" runs the heartbeat, but TallyDue is TDL plus scripts that run on demand. Decide what runs it and what stores `valid_until`.
-- **Ed25519 on Windows:** Windows PowerShell 5.1, .NET Framework and Inno Setup's Pascal script have no built-in Ed25519. A small signed helper or bundled library is needed; test it on a clean PC. The doc lists this as an open question.
-- **Stored state:** the doc says "no license file", but `valid_until`, the activation code and the latest date seen must be stored somewhere, and a user can edit them. Signed values resist editing, but the latest date seen is not signed.
-- **Enforcement:** decide how the TDL Dashboard and Settings learn the license state, since TDL cannot verify signatures itself.
-- **Stop or read-only:** the doc leaves open what happens after `valid_until`.
-
-## Current beta gaps
-
-The doc issues keys only after a verified payment, so the 15-day trial goes away for paid builds. Until then:
-
-- The trial is enforced only in `TDV2Toast.vbs`, using `expiry.txt`, which anyone can edit.
-- Rerunning the installer starts a new trial.
-- Setting the Windows clock back extends the trial.
-- The Dashboard and Settings do not check expiry.
+- **Internet:** needed only at install and while looking for a renewal. A valid license makes no network calls, so there is no periodic heartbeat. `heartbeat` runs only after the user clicks Renew or once the license has ended.
+- **One place:** all license logic is in `TallyDuesLicense.exe`. Setup and `notify.ps1` use its exit codes. The TDL has no date logic and only displays `license-status.json`.
+- **Trial:** a portal key like any other. There is no trial code in the client.
+- **No offline activation** in the first release.
 
 ## Rules
 
-- Server-side secrets (pepper, Ed25519 private key, bank keys) never enter this repo. Only the public key ships.
-- Keep the portal URL in one place, use HTTPS only, and keep certificate validation on.
-- Treat every server field as untrusted until its signature passes.
-- Check the installer pins nothing that would break when the portal certificate renews.
+- **Key:** 32 hex characters in eight groups of four. Never log it or put it on a command line. Setup passes it in a temp file, and it is stored with DPAPI.
+- **Install:** `validate` changes nothing, and `confirm` takes the seat after files are in place. A failed or cancelled install must not take a seat.
+- **Signatures:** verify every answer with the built-in Ed25519 public key and check the nonce. Verify the raw text of `payload`; never parse and rebuild it.
+- **Errors:** unsigned, so they may be shown but never change stored state.
+- **Machine:** only hashes leave the PC. The nonce binds a stored answer to the machine, using the portal's 3 of 4 rule.
+- **Failure:** a license failure must never crash or block TallyPrime. If the check cannot run, alerts stop with a message (fail closed).
+- **Secrets:** the Ed25519 private key and portal secrets never enter this repo. Only the public key ships, passed at build time.
+- **Portal URL:** in one place, HTTPS only in a real build, certificate validation on, no pinning that would break when the certificate renews, no redirects followed. Renew never takes an address from a link.
+- **Crypto changes:** `Ed25519.cs` must keep passing the RFC vector and the Node.js vectors in `tests/`.
 
 ## Test before release
 
-Edited stored state, activation code moved to another PC, clock moved back, portal down, expired subscription, revoked key, `limit_reached`, replayed response, reinstall on the same machine (no new seat), disk replaced (still 3 of 4), cancelled install (no seat taken).
+`build\Run-Tests.ps1` covers the helper. On a real PC with a real test key: portal down, `limit_reached`, reinstall on the same machine (no new seat), disk replaced (still 3 of 4), cancelled install (no seat taken), standard user, and whether a PC's board or disk serial reads correctly.

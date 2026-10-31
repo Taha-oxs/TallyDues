@@ -1,19 +1,17 @@
 ;;; =============================================================
-;;; TallyDues (licensed edition) v1.0
+;;; TallyDues v1.0
 ;;; Developed by OpenXpert Solutions
 ;;; TallyPrime add-on: Windows notifications for cheques/PDCs and
 ;;; invoices that are due, plus an on-screen Dashboard and Settings.
 ;;;
-;;; Installed by TallyDues-Store-Setup.exe, which writes the correct
-;;; script path, currency, alert timeframe and license end date into this file.
+;;; Compiled to TallyDues.tcp for release, so the installer changes nothing in this file.
 ;;; Load it in TallyPrime: F1 Help > TDL and Add-On > F4 Manage Local
 ;;; TDLs > Load on startup Yes > pick this file > Ctrl+A. Restart Tally.
 ;;;
 ;;; Menu: TallyDues Run Check, TallyDues Dashboard and TallyDues Settings are
 ;;; on the Gateway of Tally menu.
-;;; The license is enforced outside this file, in two layers: TDV2Toast.vbs (license end
-;;; date from expiry.txt vs the Windows clock) and notify.ps1 (signed license.lic check
-;;; for every alert). This file does no date maths and no expiry test.
+;;; The license is enforced outside this file, by TallyDuesLicense.exe, which notify.ps1
+;;; runs for every alert. This file does no date maths and no expiry test.
 ;;; =============================================================
 
 [System: Formula]
@@ -23,10 +21,8 @@
    TDV2DefInvBack : 7
    TDV2DefInvAhead : 7
    TDV2ScopeRev : 1
-   TDV2Cur : " "
-   TDV2ExpiryNum : 20000101
-   TDV2ExpiryDate : "01-Jan-2000"
-   TDV2ExpiryNote : "Your TallyDues license has expired. Please renew your subscription to keep receiving notifications."
+   ;; Never empty: the trailing space stays even if the company has no symbol.
+   TDV2Cur : @@CMPCurrencySymbol + " "
 
 [System: Formula]
    TDV2IsSales : ($VoucherTypeName = "Sales") AND (NOT $IsCancelled) AND (NOT $IsOptional)
@@ -161,7 +157,7 @@
 
 [Function: TDV2WelcomeFn]
    Variable : TDV2WMsg : String : ""
-   010 : Set : TDV2WMsg : "//B //Nologo " + @@TDV2Script + " TallyDues general Welcome to TallyDues! Your license is valid until " + @@TDV2ExpiryDate + ". Use the TallyDues items on the Gateway of Tally menu: Run Check to see what is due, Dashboard for the full lists, Settings to change the alert timeframe."
+   010 : Set : TDV2WMsg : "//B //Nologo " + @@TDV2Script + " TallyDues general Welcome to TallyDues! Use the TallyDues items on the Gateway of Tally menu: Run Check to see what is due, Dashboard for the full lists, Settings to change the alert timeframe."
    020 : Browse URL : "wscript.exe" : ##TDV2WMsg : Yes
    030 : Call : TDV2SyncScope
 
@@ -232,6 +228,11 @@
 
 [System: Formula]
    TDV2SnzN : $$NumItems:TDV2SnoozeFile
+
+;;; License text for the Dashboard footer, written by TallyDuesLicense.exe.
+[Collection: TDV2LicFile]
+   Data Source : File JSON : "C:\ProgramData\TallyDues\license-status.json"
+   JSON Object Path : "Status:1"
 
 [Line: TDV2DSnzH]
    Fields : TDV2DSnzHF
@@ -496,7 +497,7 @@
 
 [Field: TDV2DFootF]
    Use : Name Field
-   Set as : "Esc closes this screen.   License valid until " + @@TDV2ExpiryDate + "   |   Developed by OpenXpert Solutions"
+   Set as : "Esc closes this screen.   " + $$CollectionField:$LicText:1:TDV2LicFile + "   |   Developed by OpenXpert Solutions"
    Width : 100% Page
    Skip : Yes
 
@@ -631,4 +632,4 @@
    Add : Key Item : TallyDues Settings : G : Modify Variable : TDV2Settings
 
 ;;; Welcome notification: [System: Events] System Start (every Tally launch).
-;;; ============ END TallyDues v1.0 (licensed) - Developed by OpenXpert Solutions ============
+;;; ============ END TallyDues v1.0 - Developed by OpenXpert Solutions ============

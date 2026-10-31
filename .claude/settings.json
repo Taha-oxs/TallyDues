@@ -1,8 +1,8 @@
 {
   "permissions": {
     "deny": [
-      "Read(//c/ProgramData/TallyDue/pending/**)",
-      "Read(//c/ProgramData/TallyDue/snooze.json)",
+      "Read(//c/ProgramData/TallyDues/pending/**)",
+      "Read(//c/ProgramData/TallyDues/snooze.json)",
       "Read(./.env)",
       "Read(./**/*.pem)",
       "Read(./**/*.pfx)",

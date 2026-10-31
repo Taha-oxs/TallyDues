@@ -1,4 +1,4 @@
-' TDV2Toast.vbs (PRODUCTION / licensed build) - TallyDues bridge between TallyPrime and the Windows toast.
+' TDV2Toast.vbs - TallyDues bridge between TallyPrime and the Windows toast.
 ' Developed by OpenXpert Solutions
 ' Launched by the TDL:  wscript.exe //B //Nologo TDV2Toast.vbs <Title> <Type> <Message words...>
 '
@@ -9,7 +9,7 @@
 '     copy of this script and exit immediately (Tally never waits).
 '  2. Worker mode: always run notify.ps1 (the license gate lives there) and wait.
 '     Exit codes: 0 shown, 2 licensed but nothing shown, 3/4 license problem,
-'     anything else = engine could not run. Every failure ends in a
+'     5 shown with a license-ending warning, anything else = engine could not run. Every failure ends in a
 '     self-closing pop-up box so the user is still told. Problems are written
 '     to toast.log next to this file.
 On Error Resume Next
@@ -94,6 +94,71 @@ Function Clean(ByVal s, ByVal maxLen)
   Clean = o
 End Function
 
+' The license message notify.ps1 left in license-notice.txt (second line), or "".
+Function LicenseNotice()
+  On Error Resume Next
+  Dim nf, t, parts
+  LicenseNotice = ""
+  nf = base & "\license-notice.txt"
+  If fso.FileExists(nf) Then
+    Set t = fso.OpenTextFile(nf, 1, False)
+    parts = Split(t.ReadAll, vbCrLf)
+    t.Close
+    If UBound(parts) >= 1 Then LicenseNotice = parts(1)
+  End If
+End Function
+
+' Pop-up version of the license toast: Yes does what the Renew button does.
+Sub LicensePopup(ByVal text)
+  On Error Resume Next
+  Dim answer
+  If InStr(text, "Renew") > 0 Then
+    answer = sh.Popup(text & vbCrLf & vbCrLf & "Yes = Renew   No = Cancel" & vbCrLf & vbCrLf & "Developed by OpenXpert Solutions", 25, "TallyDues - License", 4 + 48)
+    If answer = 6 Then sh.Run "wscript.exe //B //Nologo " & Chr(34) & base & "\TallyDuesProtocol.vbs" & Chr(34) & " " & Chr(34) & "tallydues://renew" & Chr(34), 0, False
+  Else
+    sh.Popup text & vbCrLf & vbCrLf & "Developed by OpenXpert Solutions", 25, "TallyDues - License", 48
+  End If
+End Sub
+
+' The saved message for a snoozed reminder (pending\snoozed\<id>.txt, UTF-8): type, title,
+' message. It is deleted once read. Returns False if the id or the file is not usable.
+Function LoadSnoozed(ByVal id, ByRef outType, ByRef outMsg)
+  On Error Resume Next
+  Dim re, sf, st, parts
+  LoadSnoozed = False
+  Set re = New RegExp
+  re.Pattern = "^[0-9a-f]{12}$"
+  If Not re.Test(id) Then Exit Function
+  sf = base & "\pending\snoozed\" & id & ".txt"
+  If Not fso.FileExists(sf) Then Exit Function
+  Set st = CreateObject("ADODB.Stream")
+  st.Type = 2
+  st.Charset = "utf-8"
+  st.Open
+  st.LoadFromFile sf
+  parts = Split(st.ReadText, vbCrLf)
+  st.Close
+  If Err.Number <> 0 Then Err.Clear: Exit Function
+  If UBound(parts) < 2 Then Exit Function
+  If parts(0) <> "pdc" And parts(0) <> "invoice" Then Exit Function
+  outType = parts(0)
+  outMsg = "Snoozed reminder: " & parts(2)
+  fso.DeleteFile sf, True
+  LoadSnoozed = True
+End Function
+
+' Short fingerprint of a message, so last-toast.txt holds no customer text.
+Function Fingerprint(ByVal s)
+  On Error Resume Next
+  Dim h, k, v
+  h = 7
+  For k = 1 To Len(s)
+    v = h * 31 + Abs(AscW(Mid(s, k, 1)))
+    h = v - Int(v / 1000000007) * 1000000007
+  Next
+  Fingerprint = CStr(Len(s)) & "-" & CStr(h)
+End Function
+
 n = WScript.Arguments.Count
 If n < 1 Then WScript.Quit 0
 mode = LCase(WScript.Arguments(0))
@@ -126,14 +191,21 @@ If mode = "--worker" Then
     LogLine "notify.ps1 not found at " & ps1
   End If
   Select Case rc
-    Case 0
+    Case 0, 5
       If nmode = "popup" Or nmode = "both" Then showPopup = True
       If nmode = "auto" And ToastBlockReason() <> "" Then showPopup = True: LogLine "auto: Windows blocks toasts, showing pop-up too"
+      If rc = 5 And showPopup Then LicensePopup LicenseNotice()
     Case 2
       showPopup = True
-    Case 3, 4
-      showPopup = True
-      popMsg = "TallyDues could not verify a valid license. Use Start Menu > TallyDues > Update License, or contact OpenXpert Solutions."
+    Case 3
+      ' The notice is already on screen as a toast, unless Windows is hiding toasts.
+      If nmode = "both" Or ToastBlockReason() <> "" Then LicensePopup LicenseNotice()
+      WScript.Quit 0
+    Case 4
+      popMsg = LicenseNotice()
+      If popMsg = "" Then popMsg = "TallyDues could not check its license. Please reinstall TallyDues or contact OpenXpert Solutions."
+      LicensePopup popMsg
+      WScript.Quit 0
     Case Else
       showPopup = True
       popMsg = "TallyDues could not start its notification engine, so no alerts were shown. Please reinstall TallyDues or contact OpenXpert Solutions."
@@ -155,7 +227,7 @@ For k2 = 0 To n - 1
   raw = raw & WScript.Arguments(k2)
 Next
 raw = Trim(raw)
-LogLine "raw args (" & n & " args, " & Len(raw) & " chars): " & Left(Replace(Replace(raw, vbCr, " "), vbLf, " "), 200)
+LogLine "raw args (" & n & " args, " & Len(raw) & " chars)"
 Dim rest
 rest = ""
 For k2 = 0 To n - 1
@@ -178,31 +250,19 @@ End If
 title = Clean(title, 60)
 If title = "" Then title = "TallyDues"
 typ = Clean(typ, 20)
+If typ = "snoozed" Then
+  ' A snooze task passes only an id; the saved message is read here.
+  If Not LoadSnoozed(Trim(msg), typ, msg) Then
+    LogLine "snoozed reminder not found"
+    WScript.Quit 0
+  End If
+End If
 If typ <> "invoice" And typ <> "pdc" And typ <> "general" And typ <> "setmode" Then
   If msg = "" Then msg = typ Else msg = typ & " " & msg
   typ = "general"
 End If
 msg = Clean(msg, 400)
 If msg = "" Then msg = "TallyDues notification (no details were supplied)."
-
-' License end date: expiry.txt (yyyymmdd, written by Install-TallyDues.ps1 from the license) checked against the Windows clock. First of two layers: notify.ps1 re-checks the signed license.
-Dim expNum, todayNum, expTxt
-expNum = 0
-Err.Clear
-If fso.FileExists(base & "\expiry.txt") Then
-  Set f = fso.OpenTextFile(base & "\expiry.txt", 1, False)
-  expNum = CLng(Trim(f.ReadAll))
-  f.Close
-End If
-If Err.Number <> 0 Then expNum = 0
-Err.Clear
-todayNum = Year(Now) * 10000 + Month(Now) * 100 + Day(Now)
-If expNum > 0 And todayNum > expNum And typ <> "setmode" Then
-  expTxt = Right(CStr(expNum), 2) & "/" & Mid(CStr(expNum), 5, 2) & "/" & Left(CStr(expNum), 4)
-  typ = "general"
-  msg = "Your TallyDues license expired on " & expTxt & ". Please renew your subscription to keep receiving notifications."
-  LogLine "license end date passed (" & expNum & ")"
-End If
 
 If typ = "setmode" Then
   Dim wanted
@@ -220,28 +280,39 @@ If typ = "setmode" Then
   WScript.Quit 0
 End If
 
-' de-duplicate: same message within 20 seconds (e.g. key held down / double click)
-Dim mark, f, last, tooSoon
+' de-duplicate: any message already sent in the last 20 seconds, not only the latest one, so
+' cheque and invoice alerts arriving in turn are caught too. Lines are "seconds|fingerprint".
+Dim mark, f, tooSoon, nowSec, print, keep, entries, entry, bits
 mark = base & "\last-toast.txt"
 tooSoon = False
-If typ = "setmode" Then
-  tooSoon = False
-ElseIf fso.FileExists(mark) Then
+nowSec = DateDiff("s", #1/1/2000#, Now)
+print = Fingerprint(msg)
+keep = ""
+If fso.FileExists(mark) Then
   Set f = fso.OpenTextFile(mark, 1, False)
-  last = f.ReadAll
+  entries = Split(f.ReadAll, vbCrLf)
   f.Close
-  If last = msg Then
-    If DateDiff("s", fso.GetFile(mark).DateLastModified, Now) < 20 Then tooSoon = True
-  End If
+  If Err.Number <> 0 Then Err.Clear: entries = Array()
+  For Each entry In entries
+    bits = Split(entry, "|")
+    If UBound(bits) = 1 Then
+      If IsNumeric(bits(0)) Then
+        If nowSec - CDbl(bits(0)) < 20 And nowSec >= CDbl(bits(0)) Then
+          keep = keep & entry & vbCrLf
+          If bits(1) = print Then tooSoon = True
+        End If
+      End If
+    End If
+  Next
 End If
 If tooSoon Then LogLine "skipped: same message within 20 seconds": WScript.Quit 0
 Err.Clear
 Set f = fso.OpenTextFile(mark, 2, True)
-f.Write msg
+f.Write keep & nowSec & "|" & print & vbCrLf
 f.Close
 Err.Clear
 
 sh.Run "wscript.exe //B //Nologo " & Chr(34) & WScript.ScriptFullName & Chr(34) & " --worker " & _
        Chr(34) & title & Chr(34) & " " & Chr(34) & typ & Chr(34) & " " & Chr(34) & msg & Chr(34), 0, False
-If Err.Number <> 0 Then LogLine "could not start worker: " & Err.Description Else LogLine "worker started: type=" & typ & " msg=" & Left(msg, 120)
+If Err.Number <> 0 Then LogLine "could not start worker: " & Err.Description Else LogLine "worker started: type=" & typ
 WScript.Quit 0

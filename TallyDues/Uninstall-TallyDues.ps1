@@ -1,13 +1,14 @@
-# Uninstall-TallyDues.ps1 (PRODUCTION) - reverses what Install-TallyDues.ps1 did on this
+# Uninstall-TallyDues.ps1 - reverses what Install-TallyDues.ps1 did on this
 # machine: deletes the InstallDir folder (default C:\ProgramData\TallyDues),
-# removes any pending TallyDues snooze reminders (scheduled tasks named
-# TallyDues-Snooze-*), un-registers the tallydues:// protocol handler (HKCU)
+# removes any TallyDues scheduled tasks (snooze reminders and the renewal
+# check, named TallyDues-*), un-registers the tallydues:// protocol handler (HKCU)
 # and removes the old TallyDues Start Menu shortcut if present. The Inno Setup
 # uninstaller calls this first; the uninstaller's own exe is locked while it
 # runs, so Inno removes that last. It cannot remove the add-on from
 # TallyPrime's TDL list (Tally has no scripted way to do that): the user does
 # that in F1 > TDL and Add-On > F4.
-# Deleting the install folder also removes license.lic and state.dat.
+# The uninstaller frees the license seat before running this. Deleting the
+# install folder also removes license.dat and state.dat.
 param(
   [string]$InstallDir = "$env:ProgramData\TallyDues"
 )
@@ -19,8 +20,8 @@ if (Test-Path -LiteralPath $InstallDir) {
   Write-Host "$InstallDir not found, nothing to remove."
 }
 try {
-  Get-ScheduledTask -TaskName "TallyDues-Snooze-*" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
-  Write-Host "Removed pending snooze reminders."
+  Get-ScheduledTask -TaskName "TallyDues-*" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
+  Write-Host "Removed TallyDues scheduled tasks."
 } catch { }
 $proto = "HKCU:\SOFTWARE\Classes\tallydues"
 if (Test-Path $proto) {
