@@ -5,7 +5,7 @@
 ; folder choice). The customer enters a license key, paid or trial, which is
 ; checked with the portal before anything is installed. After the files are in
 ; place, the seat is taken and the signed license stored; a failed or cancelled
-; install takes no seat. It then shows the one step that must be done inside
+; install does not keep one. It then shows the one step that must be done inside
 ; TallyPrime (loading the add-on).
 ;
 ; All license logic is in TallyDuesLicense.exe. Build it first: see build\Build-Helper.ps1.
@@ -97,6 +97,7 @@ var
   InstallOK: Boolean;
   InstallNote: String;
   KeyEntered: Boolean;
+  HadLicense: Boolean;
   LicensePage: TInputQueryWizardPage;
 
 function HelperPath: String;
@@ -185,6 +186,7 @@ var
 begin
   Result := False;
   KeyEntered := False;
+  HadLicense := FileExists(ExpandConstant('{commonappdata}\TallyDues\license.dat'));
   Key := Uppercase(Trim(LicensePage.Values[0]));
   if Key = '' then
   begin
@@ -293,22 +295,37 @@ begin
   end;
 end;
 
-// Takes the seat. A cancelled or failed confirm removes the install, so no seat is used.
+// Takes the seat. If that fails, a new install is removed. A PC that already had a license
+// keeps it, because the uninstaller would give up its seat and delete it.
 function ConfirmSeat: Boolean;
 var
-  Code, ResultCode: Integer;
+  Code, ResultCode, Waited: Integer;
+  Reason: String;
 begin
   Code := HelperWithRetry('confirm --key-file "' + KeyFile + '" --state "' + StateFile + '" --install-dir "' + ExpandConstant('{app}') + '"',
     'Setup could not reach the license server to finish.' + #13#10 + #13#10 +
-    'Please check your internet connection, then click Retry. If you cancel, TallyDues is removed and no seat is used.');
+    'Please check your internet connection, then click Retry. If you cancel, this key is not applied.');
   Result := Code = CodeOk;
   if Result then
     Exit;
   if Code = CodeNetwork then
-    InstallNote := 'The license server could not be reached, so TallyDues was removed and no seat was used. Please run Setup again when you are online.'
+    Reason := 'The license server could not be reached.'
   else
-    InstallNote := KeyMessage(Code) + #13#10 + #13#10 + 'TallyDues was removed and no seat was used.';
+    Reason := KeyMessage(Code);
+  if HadLicense then
+  begin
+    InstallNote := Reason + #13#10 + #13#10 + 'The new key was not applied. Your existing TallyDues license is still in place.';
+    Exit;
+  end;
+  InstallNote := Reason + #13#10 + #13#10 + 'TallyDues was removed. Running Setup again on this PC with the same key will not use another seat.';
   Exec(ExpandConstant('{uninstallexe}'), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // The uninstaller relaunches itself from a temp copy, so Exec can return before it finishes.
+  Waited := 0;
+  while FileExists(ExpandConstant('{uninstallexe}')) and (Waited < 30) do
+  begin
+    Sleep(1000);
+    Waited := Waited + 1;
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

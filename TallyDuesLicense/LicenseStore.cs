@@ -30,7 +30,10 @@ namespace TallyDues.License
             if (Components == null || Components.Length != 4 || string.IsNullOrEmpty(Random)) return false;
             if (string.IsNullOrEmpty(PayloadRaw) || !Portal.IsTrusted(PayloadRaw, Signature)) return false;
             var payload = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(PayloadRaw);
+            // A validate answer holds a confirm token and never counts as a license: it takes no seat.
             return Portal.AsString(payload, "result") == "ok"
+                && !payload.ContainsKey("confirm_token")
+                && Portal.AsString(payload, "valid_until").Length > 0
                 && Portal.AsString(payload, "nonce") == Machine.Nonce(Components, Random);
         }
     }
@@ -97,9 +100,21 @@ namespace TallyDues.License
             return state;
         }
 
+        // State is a helper, not the license: failing to write it must not cost the customer an alert.
         public void SaveState(Dictionary<string, string> state)
         {
-            WriteAtomic(StatePath, string.Join("\r\n", state.Select(pair => pair.Key + "=" + pair.Value)));
+            try
+            {
+                WriteAtomic(StatePath, string.Join("\r\n", state.Select(pair => pair.Key + "=" + pair.Value)));
+            }
+            catch (IOException)
+            {
+                // Tried again on the next run.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Tried again on the next run.
+            }
         }
 
         // The Dashboard footer reads this, so the TDL holds no license date.
@@ -125,10 +140,17 @@ namespace TallyDues.License
 
         private static void WriteAtomic(string path, string text)
         {
-            string temp = path + ".tmp";
-            File.WriteAllText(temp, text, Encoding.ASCII);
-            if (File.Exists(path)) File.Replace(temp, path, null);
-            else File.Move(temp, path);
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, text, Encoding.ASCII);
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
         }
     }
 }

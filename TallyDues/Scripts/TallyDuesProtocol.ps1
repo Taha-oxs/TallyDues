@@ -126,6 +126,9 @@ function Invoke-Renew {
         $helper = Join-Path $PSScriptRoot "TallyDuesLicense.exe"
         $run = Start-Process -FilePath $helper -ArgumentList "open-renewal" -WindowStyle Hidden -Wait -PassThru
         if ($run.ExitCode -ne 0) { throw ("could not open the portal (code " + $run.ExitCode + ")") }
+        # Any web page can open this link, so the task starts only when a renewal is really due.
+        $can = Start-Process -FilePath $helper -ArgumentList ('can-renew --install-dir "' + $PSScriptRoot + '"') -WindowStyle Hidden -Wait -PassThru
+        if ($can.ExitCode -ne 0) { Write-TDLog "renewal check not needed"; return }
         $act = New-ScheduledTaskAction -Execute $helper -Argument ('renew-check --force --install-dir "' + $PSScriptRoot + '"')
         $trg = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 14)
         $set = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew

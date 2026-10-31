@@ -53,6 +53,8 @@ Errors are unsigned: `{"error": "invalid_key|expired|revoked|subscription_suspen
 
 The scripts and the helper run on the customer's PC and can be patched. The aim is to stop key sharing and casual copying, not a determined cracker. A revoked key keeps working on an offline PC until its end date.
 
+**Open until the portal changes:** signed answers name no machine, so someone with a valid key and a script can make a working `license.dat` for another PC without taking a seat. See item 7 in `Portal-Team-Requests.md`. Copying the file alone does not work.
+
 ## Files in the install folder
 
 | File | Purpose |

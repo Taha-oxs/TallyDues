@@ -89,6 +89,7 @@ namespace TallyDues.License.Tests
         {
             status = "200 OK";
             if (Mode == "http500") { status = "500 Server Error"; json = "oops"; return; }
+            if (Mode == "throttle") { status = "429 Too Many Requests"; json = "{\"message\":\"Too Many Attempts.\"}"; return; }
             if (Mode == "redirect") { status = "302 Found"; json = "{}"; return; }
             if (Mode == "html") { json = "<html>captive wifi page</html>"; return; }
             if (ErrorCode != null) { status = ErrorCode == "invalid_key" ? "404 Not Found" : ErrorCode == "rate_limited" ? "429 Too Many" : "403 Forbidden"; json = "{\"error\":\"" + ErrorCode + "\"}"; return; }
@@ -161,6 +162,7 @@ namespace TallyDues.License.Tests
                 Warnings();
                 Renewal();
                 ReleaseSeat();
+                ReviewFixes();
             }
             finally
             {
@@ -375,6 +377,69 @@ namespace TallyDues.License.Tests
             portal.Mode = "ok";
             File.Delete(Path.Combine(dir, "license.dat"));
             Check("release with no license is fine", Run("release") == ExitCodes.Ok);
+        }
+
+        private static void ReviewFixes()
+        {
+            Reset();
+            portal.Mode = "throttle";
+            Check("Laravel throttle reads as rate limited", Run("validate") == ExitCodes.RateLimited);
+            portal.Mode = "ok";
+
+            // A saved validate answer must not count as a license: it takes no seat.
+            Install();
+            string path = Path.Combine(dir, "license.dat");
+            var serializer = new JavaScriptSerializer();
+            LicenseFile license = serializer.Deserialize<LicenseFile>(File.ReadAllText(path));
+            string nonce = Machine.Nonce(license.Components, license.Random);
+            string validatePayload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\",\"confirm_token\":\"" + new string('t', 48) + "\",\"valid_until\":\"2099-01-01T00:00:00+00:00\"}";
+            license.PayloadRaw = validatePayload;
+            license.Signature = Convert.ToBase64String(Ed25519.Sign(Enumerable.Repeat((byte)7, 32).ToArray(), Encoding.UTF8.GetBytes(validatePayload)));
+            File.WriteAllText(path, serializer.Serialize(license));
+            Check("saved validate answer refused", Run("check") == ExitCodes.NoLicense);
+
+            // Alerts start together: every one must pass, and a warning must show only once.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-04-20T10:00:00");
+            var results = new int[8];
+            var outs = new string[8];
+            var threads = Enumerable.Range(0, 8).Select(i => new Thread(() =>
+            {
+                outs[i] = Path.Combine(root, "out" + i + ".txt");
+                results[i] = Run("check", "--out", outs[i]);
+            })).ToList();
+            threads.ForEach(t => t.Start());
+            threads.ForEach(t => t.Join());
+            Check("checks running together all pass", results.All(r => r == ExitCodes.Ok));
+            Check("warning shows once when run together", outs.Count(o => File.ReadAllLines(o)[0] == "14") == 1);
+
+            // Date set far ahead once, then corrected: reinstalling with the key clears it.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-01-15T10:00:00");
+            Run("check");
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2026-12-01T10:00:00");
+            Check("wrong date then blocks", Run("check") == ExitCodes.ClockBack);
+            Run("validate");
+            Run("confirm");
+            Check("reinstall clears the wrong date", Run("check") == ExitCodes.Ok);
+
+            // Renewal task only near or after the end date.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2026-12-01T10:00:00");
+            Check("no renewal task far from the end", Run("can-renew") == ExitCodes.NoChange);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-04-20T10:00:00");
+            Check("renewal task near the end", Run("can-renew") == ExitCodes.Ok);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-06-01T10:00:00");
+            Check("renewal task after the end", Run("can-renew") == ExitCodes.Ok);
+
+            // The seat is given back if the license cannot be stored.
+            Reset();
+            Run("validate");
+            int seats = portal.SeatsTaken;
+            string blocked = Path.Combine(dir, "license.dat");
+            Directory.CreateDirectory(blocked);
+            Check("failed save reports failure", Run("confirm") == ExitCodes.NoLicense);
+            Check("failed save frees the seat", portal.SeatsTaken == seats);
         }
 
         private static string WarnAt(string now)

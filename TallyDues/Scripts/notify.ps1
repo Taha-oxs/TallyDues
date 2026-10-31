@@ -217,19 +217,26 @@ Clear-OldPending
 # --- License gate (fails closed) ---
 $helper = Join-Path $ScriptRoot "TallyDuesLicense.exe"
 $noticeFile = Join-Path $ScriptRoot "license-notice.txt"
+# Cheque and invoice alerts run together, so each check gets its own answer file.
+$gateFile = Join-Path $ScriptRoot ("license-check-" + [guid]::NewGuid().ToString('N') + ".tmp")
 $gateCode = -1
 $warnLevel = "0"
 $notice = "TallyDues could not check its license. Please reinstall TallyDues or contact OpenXpert Solutions."
 try {
-    if (Test-Path -LiteralPath $noticeFile) { Remove-Item -LiteralPath $noticeFile -Force }
-    $gateArgs = 'check --install-dir "' + $ScriptRoot + '" --out "' + $noticeFile + '"'
+    $gateArgs = 'check --install-dir "' + $ScriptRoot + '" --out "' + $gateFile + '"'
     $gateCode = (Start-Process -FilePath $helper -ArgumentList $gateArgs -WindowStyle Hidden -Wait -PassThru).ExitCode
-    $noticeLines = [IO.File]::ReadAllLines($noticeFile)
+    $noticeLines = [IO.File]::ReadAllLines($gateFile)
     $warnLevel = $noticeLines[0]
     $notice = $noticeLines[1]
 } catch {
     $gateCode = -1
     Write-TDLog ("license check could not run: " + $_)
+} finally {
+    try { Remove-Item -LiteralPath $gateFile -Force -ErrorAction SilentlyContinue } catch { }
+}
+if ($gateCode -ne 0 -or $warnLevel -ne "0") {
+    # For the bridge's pop-up. Only the text matters, so a clash between alerts does no harm.
+    try { [IO.File]::WriteAllText($noticeFile, ($warnLevel + "`r`n" + $notice), [Text.Encoding]::ASCII) } catch { }
 }
 if ($gateCode -ne 0) {
     Write-TDLog ("LICENSE BLOCK: code " + $gateCode)

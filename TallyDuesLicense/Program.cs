@@ -10,6 +10,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace TallyDues.License
@@ -73,7 +74,34 @@ namespace TallyDues.License
                 case "renew-check": return RenewCheck(options, dir);
                 case "release": return Release(dir);
                 case "open-renewal": return OpenRenewal();
+                case "can-renew": return CanRenew(dir);
                 default: return ExitCodes.Usage;
+            }
+        }
+
+        // Cheque and invoice alerts start together, so file updates take turns across processes.
+        // If the wait runs out the work goes ahead, because a late alert is worse than a lost warning.
+        private static T WithLock<T>(Func<T> action)
+        {
+            using (var mutex = new Mutex(false, @"Local\TallyDues-License"))
+            {
+                bool owned = false;
+                try
+                {
+                    try
+                    {
+                        owned = mutex.WaitOne(TimeSpan.FromSeconds(10));
+                    }
+                    catch (AbandonedMutexException)
+                    {
+                        owned = true;
+                    }
+                    return action();
+                }
+                finally
+                {
+                    if (owned) mutex.ReleaseMutex();
+                }
             }
         }
 
@@ -124,10 +152,55 @@ namespace TallyDues.License
                 PayloadRaw = answer.PayloadRaw,
                 Signature = answer.Signature
             };
-            store.Save(license);
-            ClearWarnings(store);
-            store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()));
+            if (!license.IsAuthentic()) return FreeSeatAfterFailure(key, machine, ExitCodes.BadResponse);
+            try
+            {
+                store.Save(license);
+            }
+            catch (IOException)
+            {
+                return FreeSeatAfterFailure(key, machine, ExitCodes.NoLicense);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return FreeSeatAfterFailure(key, machine, ExitCodes.NoLicense);
+            }
+            // A new license starts clean, so a wrong date seen earlier cannot block it.
+            WithLock<object>(() =>
+            {
+                Dictionary<string, string> state = store.LoadState();
+                state.Remove("LASTSEEN");
+                state.Remove("WARN_FOR");
+                state.Remove("WARN_LEVEL");
+                store.SaveState(state);
+                store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()));
+                return null;
+            });
             return ExitCodes.Ok;
+        }
+
+        // The portal holds the seat by now, but this PC has no license. Try to give the seat back.
+        private static int FreeSeatAfterFailure(string key, string[] machine, int failure)
+        {
+            try
+            {
+                string nonce = Machine.Nonce(machine, NewRandom());
+                Portal.Post("/api/v1/tally/release", Request("key", key, machine, nonce), nonce);
+            }
+            catch (PortalException)
+            {
+                // Installing again on this PC reuses the seat, so nothing is lost.
+            }
+            return failure;
+        }
+
+        // Only a license that has ended or is about to end may start the renewal task, since
+        // any web page can open a tallydues:// link.
+        private static int CanRenew(string dir)
+        {
+            LicenseFile license = new LicenseStore(dir).Load();
+            if (license == null || !license.IsAuthentic()) return ExitCodes.NoLicense;
+            return (license.ValidUntil() - new DateTimeOffset(Now())).TotalDays <= 14 ? ExitCodes.Ok : ExitCodes.NoChange;
         }
 
         // Local gate, run before every alert. Makes no network call.
@@ -135,8 +208,8 @@ namespace TallyDues.License
         {
             var store = new LicenseStore(dir);
             string warnLevel = "0";
-            string message;
-            int result = Evaluate(store, out warnLevel, out message);
+            string message = "";
+            int result = WithLock(() => Evaluate(store, out warnLevel, out message));
             string outPath = Option(options, "out", null);
             if (outPath != null) File.WriteAllText(outPath, warnLevel + "\r\n" + message, Encoding.ASCII);
             return result;
@@ -225,8 +298,13 @@ namespace TallyDues.License
             {
                 return ExitCodes.NoChange;
             }
-            state["LAST_TRY"] = Now().Ticks.ToString(CultureInfo.InvariantCulture);
-            store.SaveState(state);
+            WithLock<object>(() =>
+            {
+                Dictionary<string, string> latest = store.LoadState();
+                latest["LAST_TRY"] = Now().Ticks.ToString(CultureInfo.InvariantCulture);
+                store.SaveState(latest);
+                return null;
+            });
 
             string key = LicenseStore.Unprotect(license.KeyProtected);
             string[] machine = Machine.Components();
@@ -241,12 +319,17 @@ namespace TallyDues.License
                 PayloadRaw = answer.PayloadRaw,
                 Signature = answer.Signature
             };
+            if (!renewed.IsAuthentic()) return ExitCodes.BadResponse;
             if (renewed.ValidUntil() <= license.ValidUntil()) return ExitCodes.NoChange;
 
-            store.Save(renewed);
-            ClearWarnings(store);
             string endText = ShowDate(renewed.ValidUntil());
-            store.WriteStatus("License valid until " + endText);
+            WithLock<object>(() =>
+            {
+                store.Save(renewed);
+                ClearWarnings(store);
+                store.WriteStatus("License valid until " + endText);
+                return null;
+            });
             RemoveRenewTask();
             if (!options.ContainsKey("quiet")) ShowRenewed(dir, endText);
             return ExitCodes.Ok;

@@ -102,6 +102,8 @@ namespace TallyDues.License
         private static int ErrorFrom(HttpWebResponse response)
         {
             if ((int)response.StatusCode >= 500) return ExitCodes.Network;
+            // Laravel's own throttle answers 429 with no "error" field.
+            if ((int)response.StatusCode == 429) return ExitCodes.RateLimited;
             try
             {
                 var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(ReadBody(response));
@@ -128,11 +130,13 @@ namespace TallyDues.License
             try
             {
                 var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(text);
+                // Parsed from the same text the signature check uses, so a second "payload" cannot differ.
+                string raw = RawPayload(text);
                 var answer = new SignedAnswer
                 {
-                    PayloadRaw = RawPayload(text),
+                    PayloadRaw = raw,
                     Signature = AsString(values, "signature"),
-                    Payload = values["payload"] as Dictionary<string, object>
+                    Payload = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(raw)
                 };
                 if (answer.Payload == null || answer.Signature.Length == 0) throw new PortalException(ExitCodes.BadResponse);
                 return answer;
