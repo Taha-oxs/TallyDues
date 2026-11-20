@@ -66,7 +66,7 @@ namespace TallyDues.License
         private static string Send(string endpoint, string json)
         {
             if (!Config.IsConfigured) throw new PortalException(ExitCodes.NotConfigured);
-#if !TEST_BUILD
+#if !TEST_BUILD && !LOCAL_PORTAL
             if (!Config.PortalUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) throw new PortalException(ExitCodes.NotConfigured);
 #endif
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;

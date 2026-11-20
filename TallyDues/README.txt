@@ -21,6 +21,11 @@ USE (in TallyPrime, at the Gateway of Tally screen)
   TallyDues Settings    change the alert timeframe (Ctrl+A saves)
   TallyDues Change License Key
                         enter a new license key (needs internet)
+  TallyDues Release License
+                        remove your license from this PC so the key can be
+                        used again, then uninstall TallyDues (needs
+                        internet; nothing is uninstalled if the release
+                        fails)
   These are items on the Gateway of Tally menu.
   The Dashboard's last lines show the alert script in use and your license
   end date.
@@ -47,12 +52,16 @@ CHANGING YOUR LICENSE KEY
   Paying after a trial gives you a new key. Choose TallyDues Change License Key
   on the Gateway of Tally menu, or Start Menu > TallyDues > Change License Key.
   Your current license stays in place until the new key is accepted. The old
-  key is then removed from this PC and cannot be used again.
+  key is then removed from this PC but not released.
 
 MOVING TO ANOTHER PC
-  A license key works only once, on one PC, and cannot be moved. Please contact
-  OpenXpert Solutions for a replacement key. The same applies after uninstalling
-  TallyDues or reinstalling Windows.
+  A license key works on one PC at a time. On the old PC choose TallyDues
+  Release License on the Gateway of Tally menu, or Start Menu > TallyDues >
+  Release License. Once the OpenXpert portal confirms the release, TallyDues
+  asks to uninstall itself from the old PC. Then run Setup on the new PC with
+  the same key. Uninstalling
+  also releases the license. If the old PC has no internet, or is lost or
+  broken, call OpenXpert Solutions and ask them to release it.
 
 NOT SEEING NOTIFICATIONS?
   Windows may be hiding them. Turn notifications on, turn Do Not
@@ -63,7 +72,7 @@ NOT SEEING NOTIFICATIONS?
 PRIVACY
   Your TallyPrime data stays on this PC. Only your license key, hashed
   identifiers of this PC and the TallyDues version go to the OpenXpert portal,
-  at install, on uninstall and while checking for a renewal.
+  at install, on release, on uninstall and while checking for a renewal.
 
 MORE
   See TallyDues-User-Guide.md (Start Menu > TallyDues > User Guide).

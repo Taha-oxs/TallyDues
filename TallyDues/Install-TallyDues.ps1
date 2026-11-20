@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 try {
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# The compiled add-on holds this path, so it cannot be changed at install time.
+# The add-on holds this path, and the installer does not change it.
 $expected = "C:\ProgramData\TallyDues"
 if ([IO.Path]::GetFullPath($InstallDir).TrimEnd('\') -ine $expected) {
   throw ("TallyDues needs the folder " + $expected + " but this PC's shared data folder is " + $InstallDir + ". Please contact OpenXpert Solutions.")

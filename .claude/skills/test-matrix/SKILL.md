@@ -77,7 +77,11 @@ Give the user the shortest list of cases that covers the change, then record the
 - L11 After the end date: alerts stop, Renew and Cancel shown, Dashboard and Settings open, TallyPrime usable
 - L12 Renew offline: browser fails to load; connect; after renewal on the portal, alerts return with no reinstall
 - L13 Pop-up mode: Yes on the pop-up does what Renew does
-- L14 A key already used, on this PC or another: refused with the replacement key message
+- L14 A key active on another PC: refused with the release message
+- L22 Release License opens from the Gateway and the Start Menu, in front of TallyPrime. No changes nothing. Yes stops alerts and the Dashboard footer shows no license
+- L23 Release with no internet: own message, alerts keep working, Release works once online
+- L24 Released key activates again on this PC with Change License Key, and on another PC with Setup; the portal shows one active machine
+- L25 Uninstall online: seat freed on the portal. Uninstall offline: Retry, then a call OpenXpert warning with No as the default; No keeps everything, Yes removes everything and the same PC can reinstall with the same key
 - L15 Setup over a licensed PC, valid and ended, with the box empty: installs, license kept
 - L16 Change License Key opens from the Gateway and the Start Menu, in front of TallyPrime, with the key masked and copy refused
 - L17 Change to a good key: both dates shown, No changes nothing, Yes activates it, the Dashboard footer updates

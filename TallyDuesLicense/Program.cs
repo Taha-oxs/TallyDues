@@ -36,6 +36,7 @@ namespace TallyDues.License
         public const int SameKey = 41;
         public const int TooManyTries = 42;
         public const int OtherAccount = 43;
+        public const int ReleaseUnfinished = 44;
     }
 
     internal static class Program
@@ -77,9 +78,11 @@ namespace TallyDues.License
                 case "renew-check": return RenewCheck(options, dir);
                 case "open-renewal": return OpenRenewal();
                 case "can-renew": return CanRenew(dir);
+                case "release": return LicenseRelease.Run(dir);
 #if !TEST_BUILD
                 // Takes no key option on purpose: the key can only be typed into the window.
                 case "change-key": return KeyChangeWindow.ShowWindow(dir);
+                case "release-window": return ReleaseWindow.ShowWindow(dir);
 #endif
                 default: return ExitCodes.Usage;
             }
@@ -126,7 +129,7 @@ namespace TallyDues.License
             return ExitCodes.Ok;
         }
 
-        // After a successful install: writes the keyfile, tells the portal, which burns the key,
+        // After a successful install: writes the keyfile, tells the portal, which takes the seat,
         // then stores the signed license. Alerts stay off until the signed answer is stored.
         private static int Confirm(Dictionary<string, string> options, string dir)
         {
@@ -161,7 +164,7 @@ namespace TallyDues.License
             }
             catch (PortalException e)
             {
-                // After a lost connection the portal may have burned the key, so the retry needs the keyfile.
+                // After a lost connection the portal may have taken the seat, so the retry needs the keyfile.
                 if (e.ExitCode != ExitCodes.Network) store.RemovePending();
                 throw;
             }
@@ -169,7 +172,7 @@ namespace TallyDues.License
         }
 
         // Saves a confirmed license. If it cannot be saved, any license already there stays as it was.
-        // The key is burned by now and cannot be given back, which is why WritePending tests the folder first.
+        // The seat is taken by now, which is why WritePending tests the folder first.
         internal static int StoreConfirmed(LicenseStore store, string key, string[] machine, string random, SignedAnswer answer)
         {
             var license = new LicenseFile
@@ -212,7 +215,7 @@ namespace TallyDues.License
                 state.Remove("KEY_FAILS");
                 state.Remove("KEY_FAIL_AT");
                 store.SaveState(state);
-                store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()));
+                store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()), license.Licensee());
                 return null;
             });
             return ExitCodes.Ok;
@@ -245,13 +248,13 @@ namespace TallyDues.License
             LicenseFile license = store.Load();
             if (license == null || !license.IsAuthentic())
             {
-                message = "TallyDues has no valid license on this PC. A license key works only once, so please contact OpenXpert Solutions for a replacement key, then enter it with TallyDues Change License Key.";
+                message = "TallyDues has no valid license on this PC. Enter your license key with TallyDues Change License Key. If that key is active on another PC, release it there first, or contact OpenXpert Solutions.";
                 store.WriteStatus("No valid license");
                 return ExitCodes.NoLicense;
             }
             if (!Machine.IsSameMachine(license.Components, Machine.Components()))
             {
-                message = "This TallyDues license belongs to a different PC. A license key works only once, so please contact OpenXpert Solutions for a replacement key, then enter it with TallyDues Change License Key.";
+                message = "This TallyDues license belongs to a different PC. Release it on that PC, then enter your key here with TallyDues Change License Key. If you cannot reach that PC, please contact OpenXpert Solutions.";
                 store.WriteStatus("License belongs to a different PC");
                 return ExitCodes.OtherMachine;
             }
@@ -282,14 +285,14 @@ namespace TallyDues.License
             if (new DateTimeOffset(Now()) > end)
             {
                 store.SaveState(state);
-                store.WriteStatus("License ended on " + endText);
+                store.WriteStatus("License ended on " + endText, license.Licensee());
                 message = "Your TallyDues license ended on " + endText + ", so alerts have stopped. Click Renew to renew it. If you have a new license key, use TallyDues Change License Key on the Gateway of Tally.";
                 return ExitCodes.Expired;
             }
             double days = (end - new DateTimeOffset(Now())).TotalDays;
             warnLevel = NextWarning(state, end, days);
             store.SaveState(state);
-            store.WriteStatus("License valid until " + endText);
+            store.WriteStatus("License valid until " + endText, license.Licensee());
             message = warnLevel == "0"
                 ? "OK"
                 : "Your TallyDues license ends on " + endText + ". Click Renew to keep your alerts.";
@@ -365,7 +368,7 @@ namespace TallyDues.License
                 }
                 store.Save(renewed);
                 ClearWarnings(store);
-                store.WriteStatus("License valid until " + endText);
+                store.WriteStatus("License valid until " + endText, renewed.Licensee());
                 return null;
             });
             if (replaced) return ExitCodes.NoChange;

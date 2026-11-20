@@ -1,0 +1,217 @@
+<!doctype html>
+<!-- Source for the website images. Render-Media.ps1 opens media.html?a=<name> and saves one PNG per asset. All data is made up. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TallyDues media</title>
+<style>
+  :root { --blue:#24528f; --deep:#143560; --ink:#1c2533; --mute:#5d6878; --line:#d9dfe7; --paper:#f6f4ee; --white:#fff; --amber:#c9791a; --tally:#fdf8e4; --tallyhead:#1d6f73; }
+  * { box-sizing:border-box; margin:0; }
+  html,body { background:var(--paper); }
+  body { font-family:"Segoe UI",Arial,sans-serif; color:var(--ink); overflow:hidden; }
+  .asset { display:none; position:relative; overflow:hidden; background:var(--paper); }
+  .asset.on { display:block; }
+  .brand { display:flex; align-items:center; gap:.45em; font-weight:700; letter-spacing:-.02em; }
+  .brand img { width:1.5em; height:1.5em; border-radius:.2em; }
+  .brand b { color:var(--blue); font-weight:700; } .brand span { color:#6f7680; }
+  .dark .brand b,.dark .brand span { color:#fff; }
+  h1,h2 { font-family:Georgia,"Times New Roman",serif; font-weight:400; letter-spacing:-.02em; line-height:1.06; color:var(--deep); }
+  h1 em,h2 em { color:var(--amber); }
+  p.sub { color:var(--mute); line-height:1.45; }
+  .tag { font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--blue); }
+  .note { position:absolute; color:var(--mute); opacity:.8; font-size:15px; }
+  .dark { background:var(--deep); }
+  .dark h1,.dark h2 { color:#fff; } .dark h1 em,.dark h2 em { color:#f2b45c; } .dark p.sub { color:#c6d3e4; } .dark .tag { color:#f2b45c; } .dark .note { color:#c6d3e4; }
+
+  /* Windows notification, as notify.ps1 builds it */
+  .toast { --s:1; width:calc(364px*var(--s)); background:#242424; color:#fff; border-radius:calc(8px*var(--s)); padding:calc(12px*var(--s)); font-size:calc(13.5px*var(--s)); box-shadow:0 calc(18px*var(--s)) calc(50px*var(--s)) rgba(12,28,52,.4); font-family:"Segoe UI",Arial,sans-serif; }
+  .toast .top { display:flex; align-items:center; gap:calc(8px*var(--s)); font-size:.88em; color:#e4e4e4; margin-bottom:calc(14px*var(--s)); }
+  .toast .x { margin-left:auto; color:#c8c8c8; letter-spacing:.1em; }
+  .toast .body { display:flex; gap:calc(14px*var(--s)); }
+  .toast .body img { width:calc(48px*var(--s)); height:calc(48px*var(--s)); border-radius:calc(4px*var(--s)); }
+  .toast .t { font-weight:600; margin-bottom:calc(2px*var(--s)); }
+  .toast .m { color:#cfcfcf; line-height:1.32; font-size:.96em; }
+  .toast .a { color:#a8a8a8; font-size:.84em; margin-top:calc(6px*var(--s)); }
+  .toast .b { display:grid; grid-template-columns:repeat(4,1fr); gap:calc(5px*var(--s)); margin-top:calc(14px*var(--s)); }
+  .toast .b i { font-style:normal; text-align:center; background:#333; border:calc(1px*var(--s)) solid #484848; border-radius:calc(4px*var(--s)); padding:calc(7px*var(--s)) 0; font-size:.86em; white-space:nowrap; }
+
+  /* TallyPrime report screen, as in the owner's screenshot */
+  .ts { --s:1; width:calc(var(--w,930px)*var(--s)); background:#b3bbc0; font-family:Arial,Helvetica,sans-serif; font-size:calc(13.5px*var(--s)); color:#000; box-shadow:0 calc(20px*var(--s)) calc(60px*var(--s)) rgba(12,28,52,.3); overflow:hidden; }
+  .ts .bar { display:grid; grid-template-columns:1fr auto 1fr; background:#6d7878; color:#fff; font-weight:700; padding:calc(4px*var(--s)) calc(6px*var(--s)); }
+  .ts .bar u { text-decoration:none; text-align:right; font-weight:400; }
+  .ts .mid { display:flex; }
+  .ts .panel { flex:1; background:#fff; margin:calc(22px*var(--s)) calc(10px*var(--s)) calc(16px*var(--s)) calc(14px*var(--s)); padding:calc(6px*var(--s)) calc(6px*var(--s)) calc(8px*var(--s)); font-weight:700; line-height:1.28; }
+  .ts .keys { width:calc(112px*var(--s)); background:#dbe0e3; padding:calc(6px*var(--s)); color:#7f8a90; font-size:.84em; }
+  .ts .keys div { background:#eef1f2; padding:calc(3px*var(--s)) calc(5px*var(--s)); margin-bottom:calc(6px*var(--s)); }
+  .ts .foot { background:#d6dbde; color:#7f8a90; font-size:.84em; padding:calc(3px*var(--s)) calc(6px*var(--s)); }
+  .ts .grid { display:grid; grid-template-columns:17% 37% 15% 1fr; }
+  .ts .gap { height:.9em; }
+  .ts .snz { display:grid; grid-template-columns:12% 15% 21% 1fr; }
+  .ts .spanel { background:#fff; border:calc(1px*var(--s)) solid #666; margin:calc(26px*var(--s)) calc(24px*var(--s)) 0; padding:calc(5px*var(--s)) calc(4px*var(--s)) calc(70px*var(--s)); font-weight:700; line-height:1.34; }
+  .ts .sgrid { display:grid; grid-template-columns:max-content 1fr; column-gap:calc(6px*var(--s)); }
+  .ts .num { font-style:normal; display:inline-block; width:4.4em; padding:0 .15em; border:calc(1px*var(--s)) solid transparent; line-height:1.2; }
+  .ts .num.on { background:#ffe0a8; border-color:#1e88c7; }
+  .ts .gw { width:calc(340px*var(--s)); margin:0 calc(60px*var(--s)) 0 auto; background:#a9b5c0; color:#7f8b95; font-size:.92em; line-height:1.4; padding-bottom:calc(14px*var(--s)); }
+  .ts .gw div { padding:0 calc(14px*var(--s)); text-align:center; }
+  .ts .gw div:first-child { background:#93a3b1; color:#c4ccd3; }
+  .ts .gw .hi { background:#b7b596; color:#6e6f5c; margin-top:calc(8px*var(--s)); }
+
+  /* Windows desktop strip */
+  .desk { position:absolute; background:linear-gradient(140deg,#2b5f9f,#143560 70%); }
+  .chq { position:absolute; width:560px; height:250px; background:#fff; border-radius:6px; box-shadow:0 18px 50px rgba(12,28,52,.18); padding:26px 30px; color:#6b7482; font-size:17px; transform:rotate(-5deg); }
+  .chq:after { content:""; position:absolute; left:30px; right:30px; bottom:58px; border-top:2px dashed #cfd5dd; }
+  .chq .d { position:absolute; top:24px; right:30px; color:var(--amber); font-weight:700; font-size:21px; }
+  .chq .n { position:absolute; left:30px; bottom:24px; letter-spacing:.2em; font-family:Consolas,monospace; }
+</style>
+</head>
+<body>
+
+<template id="toast-chq">
+  <div class="toast">
+    <div class="top"><span>Windows PowerShell</span><span class="x">&middot;&middot;&middot; &nbsp;&times;</span></div>
+    <div class="body"><img src="../TallyDues/Scripts/branding/logo.png" alt=""><div>
+      <div class="t">TallyDues</div>
+      <div class="m">Bluebell Distributors 3 maturing: Chq 004512 Sunrise Traders &#8377;48,500 matures <span style="white-space:nowrap">4-Nov-26</span> | Chq 118230 Patel Hardware &#8377;1,25,000 matures <span style="white-space:nowrap">5-Nov-26</span> | Chq 070914 Noor Electricals &#8377;36,200 matures <span style="white-space:nowrap">7-Nov-26</span></div>
+      <div class="a">Developed by OpenXpert Solutions</div>
+    </div></div>
+    <div class="b"><i>View Details</i><i>Snooze 1 day</i><i>Snooze 3 days</i><i>Close</i></div>
+  </div>
+</template>
+
+<template id="dash">
+  <div class="ts">
+    <div class="bar"><span>TallyDues Dashboard - what is due</span><span>Bluebell Distributors</span><u>&times;</u></div>
+    <div class="mid"><div class="panel">
+      <div>Licensed to: Bluebell Distributors Pvt Ltd</div>
+      <div>Tally date: 2-Nov-26 &nbsp;|&nbsp; Cheques: 3 days back, 14 days ahead &nbsp;|&nbsp; Invoices: 7 days back, 7 days ahead</div>
+      <div>Due in your timeframe: &nbsp;3 cheque(s) / PDC, &nbsp;3 invoice(s).</div>
+      <div>Change the timeframe: Gateway of Tally &gt; TallyDues Settings</div>
+      <div class="gap"></div>
+      <div>CHEQUES / PDC DUE IN YOUR TIMEFRAME &nbsp;(3)</div>
+      <div class="grid"><span>Cheque no.</span><span>Customer</span><span>Amount</span><span>Cheque date</span></div>
+      <div class="gap"></div>
+      <div class="grid"><span>004512</span><span>Sunrise Traders</span><span>48,500</span><span>4-Nov-26</span></div>
+      <div class="grid"><span>118230</span><span>Patel Hardware</span><span>1,25,000</span><span>5-Nov-26</span></div>
+      <div class="grid"><span>070914</span><span>Noor Electricals</span><span>36,200</span><span>7-Nov-26</span></div>
+      <div class="gap"></div>
+      <div>INVOICES DUE IN YOUR TIMEFRAME &nbsp;(3)</div>
+      <div class="grid"><span>Invoice no.</span><span>Customer</span><span>Amount</span><span>Invoice date</span></div>
+      <div class="gap"></div>
+      <div class="grid"><span>2641</span><span>Green Leaf Foods</span><span>82,750</span><span>30-Oct-26</span></div>
+      <div class="grid"><span>2648</span><span>Mehta &amp; Sons</span><span>19,300</span><span>1-Nov-26</span></div>
+      <div class="grid"><span>2655</span><span>City Medical Supply</span><span>64,100</span><span>2-Nov-26</span></div>
+      <div class="gap"></div>
+      <div>SNOOZED REMINDERS &nbsp;(1)</div>
+      <div class="gap"></div>
+      <div class="snz"><span>Cheques</span><span>2 item(s)</span><span>Snoozed for 3 days</span><span>until 5-Nov-26</span></div>
+      <div class="gap"></div>
+      <div>Esc closes this screen. &nbsp; License valid until 30-Apr-27 &nbsp; | &nbsp;Developed by OpenXpert Solutions</div>
+    </div><div class="keys"><div>F1: Detailed</div><div>F2: Period</div><div>F3: Company</div><div>N: Auto Column</div></div></div>
+    <div class="foot">Q: Quit</div>
+  </div>
+</template>
+
+<template id="settings">
+  <div class="ts" style="--w:1040px">
+    <div class="spanel">
+      <div>How many days around Tally's current date should TallyDues alert you about? (0 to 365)</div>
+      <div class="gap"></div>
+      <div class="sgrid">
+        <span>Cheques already due - days back:</span><span><i class="num on">3</i></span>
+        <span>Cheques coming up - days ahead:</span><span><i class="num">14</i></span>
+        <span>Invoices already due - days back:</span><span><i class="num">7</i></span>
+        <span>Invoices coming up - days ahead:</span><span><i class="num">7</i></span>
+      </div>
+      <div class="gap"></div>
+      <div>Type a number in a box (the current value is shown). Enter = next box. Ctrl+A = save. Esc = close.</div>
+      <div>Developed by OpenXpert Solutions</div>
+    </div>
+    <div class="gw"><div>Gateway of Tally</div><div class="hi">TallyDues Settings</div><div>TallyDues Change License Key</div><div>TallyDues Release License</div></div>
+  </div>
+</template>
+
+<!-- Website hero -->
+<section class="asset" id="hero" style="width:1920px;height:1080px">
+  <div class="brand" style="position:absolute;left:110px;top:70px;font-size:38px"><img src="../TallyDues/Scripts/branding/logo.png" alt=""><div><b>Tally</b><span>Dues</span></div></div>
+  <div style="position:absolute;left:110px;top:250px;width:760px">
+    <div class="tag" style="font-size:20px">An add-on for TallyPrime</div>
+    <h1 style="font-size:92px;margin-top:26px">Your cheque dates shouldn't live in <em>your head.</em></h1>
+    <p class="sub" style="font-size:29px;margin-top:36px;width:690px">Run a check in TallyPrime and see the cheques, PDCs and invoices in your chosen timeframe as Windows notifications, with a dashboard that lists them all.</p>
+  </div>
+  <div class="slot" data-t="dash" style="position:absolute;left:930px;top:120px;--s:1"></div>
+  <div class="slot" data-t="toast-chq" style="position:absolute;left:1270px;top:680px;--s:1.45"></div>
+  <div class="note" style="left:110px;bottom:44px">Illustration with sample data.</div>
+</section>
+
+<!-- Open Graph / link preview -->
+<section class="asset dark" id="social-link" style="width:1200px;height:630px">
+  <div class="brand" style="position:absolute;left:70px;top:50px;font-size:30px"><img src="../TallyDues/Scripts/branding/logo.png" alt=""><div><b>Tally</b><span>Dues</span></div></div>
+  <h1 style="position:absolute;left:70px;top:145px;width:560px;font-size:66px">Cheques and invoices, on your <em>screen.</em></h1>
+  <p class="sub" style="position:absolute;left:70px;top:470px;width:520px;font-size:24px">Windows alerts and a dashboard for TallyPrime.</p>
+  <div class="slot" data-t="toast-chq" style="position:absolute;left:650px;top:170px;--s:1.33"></div>
+</section>
+
+<!-- Square post -->
+<section class="asset" id="social-square" style="width:1080px;height:1080px">
+  <div class="chq" style="left:520px;top:120px"><div>Pay ______________________</div><div class="d">Post-dated: 5-Nov</div><div style="margin-top:44px">Rupees ___________________</div><div class="n">118230</div></div>
+  <div class="brand" style="position:absolute;left:80px;top:70px;font-size:34px"><img src="../TallyDues/Scripts/branding/logo.png" alt=""><div><b>Tally</b><span>Dues</span></div></div>
+  <h1 style="position:absolute;left:80px;top:420px;width:900px;font-size:92px">That cheque date?<br><em>It's on your screen.</em></h1>
+  <div class="slot" data-t="toast-chq" style="position:absolute;left:80px;top:700px;--s:1.45"></div>
+  <p class="sub" style="position:absolute;left:660px;top:800px;width:360px;font-size:27px">Alerts and a dashboard for TallyPrime users.</p>
+<div class="note" style="right:40px;bottom:24px">Illustration with sample data.</div>
+</section>
+
+<!-- Feature: notifications -->
+<section class="asset dark" id="feature-alerts" style="width:1200px;height:800px">
+  <div style="position:absolute;left:80px;top:70px;width:1040px">
+    <div class="tag" style="font-size:18px">Windows notifications</div>
+    <h2 style="font-size:60px;margin-top:16px">One check. Everything in your timeframe.</h2>
+  </div>
+  <div class="slot" data-t="toast-chq" style="position:absolute;left:290px;top:285px;--s:1.7"></div>
+<div class="note" style="right:40px;bottom:24px">Illustration with sample data.</div>
+</section>
+
+<!-- Feature: snooze -->
+<section class="asset" id="feature-snooze" style="width:1200px;height:800px">
+  <div style="position:absolute;left:80px;top:90px;width:430px">
+    <div class="tag" style="font-size:18px">Snooze</div>
+    <h2 style="font-size:60px;margin-top:16px">Not today? <em>Bring it back later.</em></h2>
+    <p class="sub" style="font-size:25px;margin-top:26px">Snooze a reminder for 1 or 3 days. It comes back even if TallyPrime is closed.</p>
+  </div>
+  <div class="slot" data-t="toast-chq" style="position:absolute;left:540px;top:170px;--s:1.65"></div>
+  <div style="position:absolute;left:540px;top:590px;width:600px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:20px 26px;font-size:21px"><b style="color:var(--amber)">Snoozed until 5-Nov</b> &nbsp;and listed on your Dashboard</div>
+<div class="note" style="right:40px;bottom:24px">Illustration with sample data.</div>
+</section>
+
+<!-- Feature: dashboard -->
+<section class="asset" id="feature-dashboard" style="width:1200px;height:800px">
+  <div style="position:absolute;left:80px;top:48px;width:1040px">
+    <div class="tag" style="font-size:18px">Dashboard</div>
+    <h2 style="font-size:50px;margin-top:10px">Everything in your timeframe, on one screen.</h2>
+  </div>
+  <div class="slot" data-t="dash" style="position:absolute;left:90px;top:165px;--s:1.12"></div>
+<div class="note" style="right:40px;bottom:24px">Illustration with sample data.</div>
+</section>
+
+<!-- Feature: settings -->
+<section class="asset dark" id="feature-settings" style="width:1200px;height:800px">
+  <div style="position:absolute;left:80px;top:90px;width:1040px">
+    <div class="tag" style="font-size:18px">Settings</div>
+    <h2 style="font-size:60px;margin-top:16px">You choose how far to look.</h2>
+    <p class="sub" style="font-size:25px;margin-top:20px">Set days back and days ahead, separately for cheques and invoices.</p>
+  </div>
+  <div class="slot" data-t="settings" style="position:absolute;left:80px;top:330px;--s:1"></div>
+  <div class="note" style="right:40px;bottom:24px">Illustration with sample data.</div>
+</section>
+
+<script>
+  document.querySelectorAll('.slot').forEach(function (slot) {
+    var node = document.getElementById(slot.dataset.t).content.firstElementChild.cloneNode(true);
+    node.style.setProperty('--s', slot.style.getPropertyValue('--s'));
+    slot.appendChild(node);
+  });
+  var name = new URLSearchParams(location.search).get('a') || 'hero';
+  document.getElementById(name).classList.add('on');
+</script>
+</body>
+</html>

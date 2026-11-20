@@ -107,7 +107,7 @@ function Invoke-Snooze([int]$Days, [string]$Id) {
                 Items    = $items
                 SnzCount = [string]$cnt
                 Label    = $label
-                Until    = $when.ToString("dd-MMM-yyyy", $Inv)
+                Until    = $when.ToString("d-MMM-yy", $Inv)
                 UntilKey = $when.ToString("yyyyMMdd", $Inv)
             }
             Update-SnoozeBoard $entry

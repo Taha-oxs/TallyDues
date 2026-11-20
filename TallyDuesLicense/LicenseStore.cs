@@ -32,13 +32,21 @@ namespace TallyDues.License
             return DateTimeOffset.Parse(Portal.AsString(payload, "valid_until"), CultureInfo.InvariantCulture);
         }
 
+        // Who the portal says holds this license. Empty if its answer does not name them yet.
+        public string Licensee()
+        {
+            var payload = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(PayloadRaw);
+            string name = new string(Portal.AsString(payload, "organisation").Where(c => !char.IsControl(c)).ToArray()).Trim();
+            return name.Length > 80 ? name.Substring(0, 80).Trim() : name;
+        }
+
         // Signed by the portal, for this nonce, and the stored machine hashes produce that nonce.
         public bool IsAuthentic()
         {
             if (Components == null || Components.Length != 4 || string.IsNullOrEmpty(Random)) return false;
             if (string.IsNullOrEmpty(PayloadRaw) || !Portal.IsTrusted(PayloadRaw, Signature)) return false;
             var payload = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(PayloadRaw);
-            // A validate answer holds a confirm token and never counts as a license: it burns nothing.
+            // A validate answer holds a confirm token and never counts as a license: it takes no seat.
             return Portal.AsString(payload, "result") == "ok"
                 && !payload.ContainsKey("confirm_token")
                 && Portal.AsString(payload, "valid_until").Length > 0
@@ -78,11 +86,11 @@ namespace TallyDues.License
         {
             Directory.CreateDirectory(dir);
             license.Seal = SealOf(license.SealedText());
-            WriteAtomic(LicensePath, new JavaScriptSerializer().Serialize(license));
+            WriteAtomic(LicensePath, AsciiJson(new JavaScriptSerializer().Serialize(license)));
             RemovePending();
         }
 
-        // The keyfile comes before the portal call: a key is burned only once this PC has shown it
+        // The keyfile comes before the portal call: a seat is taken only once this PC has shown it
         // can keep the license. It does not count as a license until the portal's signed answer arrives.
         public bool WritePending(string key, string[] machine, string random)
         {
@@ -126,7 +134,16 @@ namespace TallyDues.License
             }
         }
 
-        private bool LicenseCanBeReplaced()
+        // After the portal has freed the seat. The latest date seen goes too, like a new license.
+        public void RemoveLicense()
+        {
+            File.Delete(LicensePath);
+            RemovePending();
+            SaveState(new Dictionary<string, string>());
+            WriteStatus("No license on this PC");
+        }
+
+        public bool LicenseCanBeReplaced()
         {
             if (Directory.Exists(LicensePath)) return false;
             if (!File.Exists(LicensePath)) return true;
@@ -254,12 +271,12 @@ namespace TallyDues.License
         }
 
         // The Dashboard footer reads this, so the TDL holds no license date.
-        public void WriteStatus(string text)
+        public void WriteStatus(string text, string licensee = "")
         {
-            string json = new JavaScriptSerializer().Serialize(new Dictionary<string, object>
+            string json = AsciiJson(new JavaScriptSerializer().Serialize(new Dictionary<string, object>
             {
-                { "Status", new[] { new Dictionary<string, string> { { "LicText", text } } } }
-            });
+                { "Status", new[] { new Dictionary<string, string> { { "LicText", text }, { "LicTo", licensee } } } }
+            }));
             try
             {
                 WriteAtomic(StatusPath, json);
@@ -272,6 +289,18 @@ namespace TallyDues.License
             {
                 // Display only.
             }
+        }
+
+        // These files are ASCII. Escaping keeps non-English names, and the signed text, unchanged.
+        private static string AsciiJson(string json)
+        {
+            var result = new StringBuilder(json.Length);
+            foreach (char c in json)
+            {
+                if (c < 128) result.Append(c);
+                else result.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+            }
+            return result.ToString();
         }
 
         private static void WriteAtomic(string path, string text)

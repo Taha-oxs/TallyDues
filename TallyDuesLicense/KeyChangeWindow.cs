@@ -34,6 +34,9 @@ namespace TallyDues.License
                     Application.EnableVisualStyles();
                     using (var window = new KeyChangeWindow(dir))
                     {
+                        // TallyPrime starts the helper hidden, and Windows applies that to the first show only.
+                        window.Show();
+                        window.Hide();
                         Application.Run(window);
                         if (window.changed) result = ExitCodes.Ok;
                     }
@@ -127,7 +130,7 @@ namespace TallyDues.License
             text += change.CurrentEnd.HasValue ? "Current license ends: " + ShowDate(change.CurrentEnd.Value) + "\r\n" : "This PC has no valid license now.\r\n";
             text += "New license ends: " + ShowDate(change.NewEnd) + "\r\n\r\n";
             if (change.NewEnd < change.CurrentEnd) text += "WARNING: the new license ends EARLIER than your current one.\r\n\r\n";
-            text += "A license key works only once. Clicking Yes uses up the new key, and the old key is removed from this PC and cannot be used again.";
+            text += "Clicking Yes activates the new key on this PC. The old key is removed from this PC but is not released. To use the old key on another PC, click No and use TallyDues Release License first.";
             return text;
         }
 
@@ -140,7 +143,7 @@ namespace TallyDues.License
             status.Text = message;
         }
 
-        // A change in progress must finish, so that the burned key and the saved license agree.
+        // A change in progress must finish, so that the portal's seat and the saved license agree.
         private void OnClosing(object sender, FormClosingEventArgs e)
         {
             if (busy)

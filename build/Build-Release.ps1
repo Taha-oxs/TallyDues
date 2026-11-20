@@ -1,5 +1,5 @@
 # Build-Release.ps1 - builds the signed TallyDues-Setup.exe on your own PC.
-# It refuses to run while the portal URL or public key is missing, or with no compiled add-on.
+# It refuses to run while the portal URL or public key is missing. With no compiled add-on, Setup ships the plain TallyDues.tdl.
 # The certificate stays on this PC. Its password is asked for once, used only to import the
 # file into your Windows certificate store for this build, and never appears on a command line.
 #
@@ -15,7 +15,6 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 if (-not (Test-Path -LiteralPath $CertificatePath)) { throw "Certificate file not found: $CertificatePath" }
-if (-not (Test-Path -LiteralPath (Join-Path $root "TallyDues\TallyDues.tcp"))) { throw "TallyDues\TallyDues.tcp is missing. Compile it in TallyPrime Developer first." }
 
 $bad = Select-String -LiteralPath (Join-Path $root "TallyDues\TallyDues.tdl") -Pattern '[^\x00-\x7F]'
 if ($bad) { throw "TallyDues.tdl has non-ASCII characters on line $($bad[0].LineNumber)." }

@@ -4,7 +4,7 @@
 ;;; TallyPrime add-on: Windows notifications for cheques/PDCs and
 ;;; invoices that are due, plus an on-screen Dashboard and Settings.
 ;;;
-;;; Compiled to TallyDues.tcp for release, so the installer changes nothing in this file.
+;;; The installer changes nothing in this file.
 ;;; Load it in TallyPrime: F1 Help > TDL and Add-On > F4 Manage Local
 ;;; TDLs > Load on startup Yes > pick this file > Ctrl+A. Restart Tally.
 ;;;
@@ -185,6 +185,7 @@
 
 [Collection: TDV2InvList]
    Source Collection : TDV2SalesBase
+   Fetch : VoucherNumber, PartyLedgerName, Amount, Date
    Filter : TDV2InvInWin
    Sort : Default : $Date
 
@@ -201,7 +202,7 @@
    Height : 85% Page
 
 [Part: TDV2DashPart]
-   Lines : TDV2DL0, TDV2DL1, TDV2DBl1
+   Lines : TDV2DLic, TDV2DL0, TDV2DL1, TDV2DL2, TDV2DBl1
 
 ;;; List parts scroll vertically (Scroll + Height); the blank/footer lines are
 ;;; pinned with Bottom Line. Repeat stays on the Part, not the Line.
@@ -284,10 +285,21 @@
 ;;; Bottom Parts so it stays at the bottom of the screen.
 [Part: TDV2DashBotPart]
    Lines : TDV2DSnzH, TDV2DSnzRow, TDV2DSnzNone
-   Bottom Line : TDV2DEng, TDV2DFoot
+   Bottom Line : TDV2DFoot
    Repeat : TDV2DSnzRow : TDV2SnoozeFile
    Scroll : Vertical
    Height : 14% Page
+
+;;; Hidden until the portal's signed answer names the license holder.
+[Line: TDV2DLic]
+   Fields : TDV2DLicF
+   Invisible : $$IsEmpty:($$CollectionField:$LicTo:1:TDV2LicFile)
+
+[Field: TDV2DLicF]
+   Use : Name Field
+   Set as : "Licensed to: " + $$CollectionField:$LicTo:1:TDV2LicFile
+   Width : 100% Page
+   Skip : Yes
 
 [Line: TDV2DL0]
    Fields : TDV2DF0
@@ -296,7 +308,7 @@
    Use : Name Field
    Set as : "Tally date: " + $$String:##SVCurrentDate + "   |   Cheques: " + $$String:##TDV2ChqBack + " days back, " + $$String:##TDV2ChqAhead + " days ahead   |   Invoices: " + $$String:##TDV2InvBack + " days back, " + $$String:##TDV2InvAhead + " days ahead"
    Width : 100% Page
-   Word Wrap : Yes
+   Word Wrap : Always : Low : Yes
    Skip : Yes
 
 [Line: TDV2DL1]
@@ -304,7 +316,16 @@
 
 [Field: TDV2DF1]
    Use : Name Field
-   Set as : "Due in your timeframe:  " + $$String:@@TDV2DueChqN + " cheque(s) / PDC,  " + $$String:@@TDV2DueInvN + " invoice(s).   Change the timeframe: Gateway of Tally > TallyDues Settings"
+   Set as : "Due in your timeframe:  " + $$String:@@TDV2DueChqN + " cheque(s) / PDC,  " + $$String:@@TDV2DueInvN + " invoice(s)."
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2DL2]
+   Fields : TDV2DF2
+
+[Field: TDV2DF2]
+   Use : Name Field
+   Set as : "Change the timeframe: Gateway of Tally > TallyDues Settings"
    Width : 100% Page
    Skip : Yes
 
@@ -384,7 +405,8 @@
    Use : Name Field
    Set as : $TDV2CParty
    Width : 36
-   Word Wrap : Yes
+   Word Wrap : Always : Low : Yes
+   Max Display Lines : 2
    Skip : Yes
 
 [Field: TDV2DR3]
@@ -458,7 +480,8 @@
    Use : Name Field
    Set as : $PartyLedgerName
    Width : 36
-   Word Wrap : Yes
+   Word Wrap : Always : Low : Yes
+   Max Display Lines : 2
    Skip : Yes
 
 [Field: TDV2DV3]
@@ -483,15 +506,6 @@
    Width : 100% Page
    Skip : Yes
 
-[Line: TDV2DEng]
-   Fields : TDV2DEngF
-
-[Field: TDV2DEngF]
-   Use : Name Field
-   Set as : "Alert script in use: " + @@TDV2Script
-   Width : 100% Page
-   Skip : Yes
-
 [Line: TDV2DFoot]
    Fields : TDV2DFootF
 
@@ -513,7 +527,7 @@
    Height : 45% Page
 
 [Part: TDV2SetPart]
-   Lines : TDV2SL0, TDV2SL1, TDV2SL2, TDV2SL3, TDV2SL4, TDV2SL5
+   Lines : TDV2SL0, TDV2SBl1, TDV2SL1, TDV2SL2, TDV2SL3, TDV2SL4, TDV2SBl2, TDV2SL5, TDV2SL6
 
 [Line: TDV2SL0]
    Fields : TDV2SH0
@@ -521,6 +535,24 @@
 [Field: TDV2SH0]
    Use : Name Field
    Set as : "How many days around Tally's current date should TallyDues alert you about? (0 to 365)"
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2SBl1]
+   Fields : TDV2SBf1
+
+[Field: TDV2SBf1]
+   Use : Name Field
+   Set as : ""
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2SBl2]
+   Fields : TDV2SBf2
+
+[Field: TDV2SBf2]
+   Use : Name Field
+   Set as : ""
    Width : 100% Page
    Skip : Yes
 
@@ -601,7 +633,16 @@
 
 [Field: TDV2SH5]
    Use : Name Field
-   Set as : "Type a number in a box (the current value is shown). Enter = next box. Ctrl+A = save. Esc = close.   |   Developed by OpenXpert Solutions"
+   Set as : "Type a number in a box (the current value is shown). Enter = next box. Ctrl+A = save. Esc = close."
+   Width : 100% Page
+   Skip : Yes
+
+[Line: TDV2SL6]
+   Fields : TDV2SH6
+
+[Field: TDV2SH6]
+   Use : Name Field
+   Set as : "Developed by OpenXpert Solutions"
    Width : 100% Page
    Skip : Yes
 
@@ -631,10 +672,15 @@
    Add : Key Item : TallyDues Run Check : Z : Call : TDV2RunCheck
    Add : Key Item : TallyDues Settings : G : Modify Variable : TDV2Settings
    Add : Key Item : TallyDues Change License Key : Y : Call : TDV2ChangeKeyFn
+   Add : Key Item : TallyDues Release License : X : Call : TDV2ReleaseFn
 
 ;;; Only opens the helper's own window. The key is typed there and never enters Tally.
 [Function: TDV2ChangeKeyFn]
    010 : Browse URL : "C:\ProgramData\TallyDues\TallyDuesLicense.exe" : "change-key" : Yes
+
+;;; Only opens the helper's own window, which asks before releasing.
+[Function: TDV2ReleaseFn]
+   010 : Browse URL : "C:\ProgramData\TallyDues\TallyDuesLicense.exe" : "release-window" : Yes
 
 ;;; Welcome notification: [System: Events] System Start (every Tally launch).
 ;;; ============ END TallyDues v1.0 - Developed by OpenXpert Solutions ============

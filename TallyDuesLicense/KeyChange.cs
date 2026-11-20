@@ -18,7 +18,7 @@ namespace TallyDues.License
         private string newKey;
         private string token;
         private string[] machine;
-        // The connection dropped during Apply, so the portal may have burned the key. Only the same token may finish it.
+        // The connection dropped during Apply, so the portal may have taken the seat. Only the same token may finish it.
         private bool retryPending;
 
         public DateTimeOffset NewEnd { get; private set; }
@@ -34,7 +34,7 @@ namespace TallyDues.License
             get { return newKey == null ? "" : newKey.Substring(newKey.Length - 4); }
         }
 
-        // Checks the new key with the portal. Burns nothing and changes no license.
+        // Checks the new key with the portal. Takes no seat and changes no license.
         public int Preview(string typed)
         {
             try
@@ -74,8 +74,8 @@ namespace TallyDues.License
             }
         }
 
-        // Writes the keyfile, tells the portal, which burns the new key, then saves the new license.
-        // The old key stays burned too, so it is simply removed from this PC.
+        // Writes the keyfile, tells the portal, which takes a seat for the new key, then saves the new license.
+        // No release is sent, so the old key keeps this PC's seat. The confirm step tells the user so.
         public int Apply()
         {
             if (newKey == null) return ExitCodes.Usage;
@@ -144,7 +144,7 @@ namespace TallyDues.License
                 case ExitCodes.KeyExpired: return "That license key has ended. Renew it on the OpenXpert portal." + unchanged;
                 case ExitCodes.Revoked: return "That license key has been revoked. Please contact OpenXpert Solutions." + unchanged;
                 case ExitCodes.Suspended: return "The subscription for that license key is suspended. Please contact OpenXpert Solutions." + unchanged;
-                case ExitCodes.KeyUsed: return "That license key has already been used, and a key works only once. Please contact OpenXpert Solutions for a replacement key." + unchanged;
+                case ExitCodes.KeyUsed: return "That license key is active on another PC. Release it there first, or contact OpenXpert Solutions." + unchanged;
                 case ExitCodes.RateLimited: return "The OpenXpert portal has received too many attempts. Please try again later." + unchanged;
                 case ExitCodes.Network: return "TallyDues could not reach the OpenXpert portal. Check your internet connection and try again." + unchanged;
                 case ExitCodes.BadResponse: return "The answer from the OpenXpert portal could not be verified, so it was ignored. Please try again later." + unchanged;

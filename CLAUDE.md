@@ -6,7 +6,7 @@ Stack: TDL, PowerShell 5.1, VBScript, C# 5 (.NET Framework), Inno Setup. `build\
 
 ## Map
 
-- `TallyDues\TallyDues.tdl`: the add-on source, compiled to `TallyDues.tcp` for release.
+- `TallyDues\TallyDues.tdl`: the add-on source, shipped as it is for now. Setup ships a `TallyDues.tcp` instead if one exists.
 - `TallyDues\Scripts\`: `TDV2Toast.vbs` (bridge), `notify.ps1` (engine and license gate), `TallyDuesProtocol.*` (toast buttons).
 - `TallyDuesLicense\`: `TallyDuesLicense.exe`, the only place with license logic.
 - `installer\TallyDues-Setup.iss`: Setup, including the License Key page. `TallyDues\Install-*` and `Uninstall-*` are what it runs.
@@ -18,6 +18,7 @@ Stack: TDL, PowerShell 5.1, VBScript, C# 5 (.NET Framework), Inno Setup. `build\
 
 - TDL must be ASCII. A hook checks each `.tdl` edit.
 - TDL fails silently, so "looks right" proves nothing. Only a real run in TallyPrime proves a change works: give the user the exact steps and don't claim success without their result.
+- At the end of every chat, update `todo.md` (tasks) and `status.md` (where things stand), and read both when starting.
 - `TDV2RunCheck` is frozen: change it only when the user asks. No date logic or expiry test in the TDL. Keep the `TDV2` prefix.
 - The final name is `TallyDues` everywhere.
 - Ctrl+Y, Ctrl+O and Ctrl+S are out of scope. The Gateway menu items are the only supported route.

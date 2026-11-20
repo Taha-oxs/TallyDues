@@ -98,6 +98,9 @@ namespace TallyDues.License.Tests
             stream.Write(output, 0, output.Length);
         }
 
+        // JSON text of the name in confirm and heartbeat answers. Null leaves the field out.
+        public string Organisation;
+
         private void Answer(string path, Dictionary<string, object> request, out string status, out string json)
         {
             status = "200 OK";
@@ -131,7 +134,8 @@ namespace TallyDues.License.Tests
             {
                 // A repeated confirm after a lost answer must not burn twice.
                 if (path.EndsWith("/confirm")) { if (burnedAndLost) burnedAndLost = false; else Burns++; }
-                payload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\",\"valid_until\":\"" + ValidUntil + "\"}";
+                string named = Organisation == null ? "" : ",\"organisation\":\"" + Organisation + "\"";
+                payload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\",\"valid_until\":\"" + ValidUntil + "\"" + named + "}";
             }
             byte[] signature = Ed25519.Sign(Mode == "wrong-key" ? otherSeed : seed, Encoding.UTF8.GetBytes(payload));
             string sent = Mode == "tamper" ? payload.Replace("2027", "2099") : payload;
@@ -180,6 +184,7 @@ namespace TallyDues.License.Tests
                 OneUseKeys();
                 ReviewFixes();
                 KeyChanges();
+                LicensedTo();
             }
             finally
             {
@@ -238,6 +243,60 @@ namespace TallyDues.License.Tests
             string stored = File.ReadAllText(Path.Combine(dir, "license.dat"));
             Check("key not stored in plain text", !stored.Contains(MockPortal.GoodKey));
             Check("status file written", File.ReadAllText(Path.Combine(dir, "license-status.json")).Contains("30-Apr-2027"));
+        }
+
+        private static string LicensedToShown()
+        {
+            var status = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string, List<Dictionary<string, string>>>>(File.ReadAllText(Path.Combine(dir, "license-status.json")));
+            return status["Status"][0]["LicTo"];
+        }
+
+        private static void LicensedTo()
+        {
+            try
+            {
+                Reset();
+                portal.Organisation = null;
+                Run("validate");
+                Check("licensed to: confirm ok without a name", Run("confirm") == ExitCodes.Ok);
+                Check("licensed to: check ok without a name", Run("check") == ExitCodes.Ok);
+                Check("licensed to: empty without a name", LicensedToShown() == "");
+
+                Reset();
+                portal.Organisation = "Acme Trading LLC";
+                Run("validate");
+                Run("confirm");
+                Check("licensed to: name after confirm", LicensedToShown() == "Acme Trading LLC");
+                Run("check");
+                Check("licensed to: name after check", LicensedToShown() == "Acme Trading LLC");
+                File.Delete(Path.Combine(dir, "license.dat"));
+                Run("check");
+                Check("licensed to: gone with the license", LicensedToShown() == "");
+
+                // How PHP sends it by default, then raw: the signature must survive the ASCII file either way.
+                Reset();
+                portal.Organisation = "\\u0634\\u0631\\u0643\\u0629 Co";
+                Run("validate");
+                Run("confirm");
+                Check("licensed to: escaped name works", Run("check") == ExitCodes.Ok && LicensedToShown() == "شركة Co");
+
+                Reset();
+                portal.Organisation = "شركة Co";
+                Run("validate");
+                Run("confirm");
+                Check("licensed to: raw name keeps the license valid", Run("check") == ExitCodes.Ok && LicensedToShown() == "شركة Co");
+                Check("licensed to: status file is ASCII", File.ReadAllBytes(Path.Combine(dir, "license-status.json")).All(b => b < 128));
+
+                Reset();
+                portal.Organisation = "  Line\\nBreak " + new string('x', 100);
+                Run("validate");
+                Run("confirm");
+                Check("licensed to: cleaned and capped", LicensedToShown().Length == 80 && LicensedToShown().StartsWith("LineBreak "));
+            }
+            finally
+            {
+                portal.Organisation = null;
+            }
         }
 
         private static void PortalErrors()
@@ -431,9 +490,70 @@ namespace TallyDues.License.Tests
 
         private static void OneUseKeys()
         {
+            string path;
+            int calls;
+
+            // A released key comes off this PC and can be activated again.
             Install();
-            int calls = portal.ReleaseCalls;
-            Check("nothing releases a key", Run("release") == ExitCodes.Usage && portal.ReleaseCalls == calls);
+            path = Path.Combine(dir, "license.dat");
+            calls = portal.ReleaseCalls;
+            Check("release ok", Run("release") == ExitCodes.Ok);
+            Check("release calls the portal once", portal.ReleaseCalls == calls + 1);
+            Check("release removes the license", !File.Exists(path));
+            Check("release updates the footer", File.ReadAllText(Path.Combine(dir, "license-status.json")).Contains("No license on this PC"));
+            Check("release stops alerts", Run("check") == ExitCodes.NoLicense);
+            Check("release renew check finds nothing", Run("renew-check", "--force") == ExitCodes.NoLicense);
+            calls = portal.ReleaseCalls;
+            Check("second release has nothing to send", Run("release") == ExitCodes.NoLicense && portal.ReleaseCalls == calls);
+            Check("released key validates again", Run("validate") == ExitCodes.Ok);
+            Check("released key confirms again", Run("confirm") == ExitCodes.Ok && Run("check") == ExitCodes.Ok);
+
+            // An ended license can still give back its seat.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2028-01-01");
+            Check("ended license can release", Run("release") == ExitCodes.Ok && !File.Exists(Path.Combine(dir, "license.dat")));
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", null);
+
+            // Any failure leaves the license working, and the next try still works.
+            foreach (var failure in new Dictionary<string, int> { { "drop", ExitCodes.Network }, { "http500", ExitCodes.Network }, { "html", ExitCodes.BadResponse }, { "unsigned", ExitCodes.BadResponse }, { "wrong-key", ExitCodes.BadResponse }, { "wrong-nonce", ExitCodes.BadResponse }, { "throttle", ExitCodes.RateLimited } })
+            {
+                Install();
+                portal.Mode = failure.Key;
+                Check("release " + failure.Key + " reports it", Run("release") == failure.Value);
+                portal.Mode = "ok";
+                Check("release " + failure.Key + " keeps the license", Run("check") == ExitCodes.Ok);
+                Check("release retry after " + failure.Key, Run("release") == ExitCodes.Ok && !File.Exists(Path.Combine(dir, "license.dat")));
+            }
+            Install();
+            portal.ErrorCode = "invalid_key";
+            Check("release refused keeps the license", Run("release") == ExitCodes.InvalidKey && Run("check") == ExitCodes.Ok);
+            portal.ErrorCode = null;
+
+            // The portal answers ok for an unknown machine, so a copied license must not claim success.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_MACHINE", "x1,x2,x3,x4");
+            calls = portal.ReleaseCalls;
+            Check("copied license cannot release", Run("release") == ExitCodes.OtherMachine && portal.ReleaseCalls == calls);
+            Environment.SetEnvironmentVariable("TD_TEST_MACHINE", "m1,x2,m3,m4");
+            Check("one changed part can release", Run("release") == ExitCodes.Ok);
+
+            // A damaged file sends nothing.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            File.WriteAllText(path, File.ReadAllText(path).Replace("KeyProtected\":\"", "KeyProtected\":\"A"));
+            calls = portal.ReleaseCalls;
+            Check("edited license cannot release", Run("release") == ExitCodes.NoLicense && portal.ReleaseCalls == calls);
+
+            // A locked file stops before the portal, so the seat and the license stay in step.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            calls = portal.ReleaseCalls;
+            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                Check("locked license sends nothing", Run("release") == ExitCodes.ReleaseUnfinished && portal.ReleaseCalls == calls);
+            }
+
+            Check("no release message is empty", new[] { ExitCodes.NoLicense, ExitCodes.OtherAccount, ExitCodes.OtherMachine, ExitCodes.Network, ExitCodes.RateLimited, ExitCodes.BadResponse, ExitCodes.ReleaseUnfinished, ExitCodes.NotConfigured, ExitCodes.InvalidKey }.All(code => LicenseRelease.Message(code).Length > 0));
         }
 
         private static void ReviewFixes()
