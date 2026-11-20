@@ -37,6 +37,8 @@ namespace TallyDues.License.Tests
         private bool burnedAndLost;
         public string ConfirmError;
         public Action OnHeartbeat;
+        // A signed result other than "ok", such as "released", sent by every endpoint while set.
+        public string Result;
 
         private readonly byte[] seed = Enumerable.Repeat((byte)7, 32).ToArray();
         private readonly byte[] otherSeed = Enumerable.Repeat((byte)9, 32).ToArray();
@@ -114,7 +116,11 @@ namespace TallyDues.License.Tests
             string nonce = request["nonce"].ToString();
             if (Mode == "wrong-nonce") nonce = new string('a', 64);
             string payload;
-            if (path.EndsWith("/validate"))
+            if (Result != null)
+            {
+                payload = "{\"result\":\"" + Result + "\",\"nonce\":\"" + nonce + "\"}";
+            }
+            else if (path.EndsWith("/validate"))
             {
                 payload = "{\"result\":\"ok\",\"nonce\":\"" + nonce + "\",\"confirm_token\":\"" + new string('t', 48) + "\",\"seats_free\":1,\"valid_until\":\"" + ValidUntil + "\"}";
             }
@@ -181,6 +187,7 @@ namespace TallyDues.License.Tests
                 ClockChecks();
                 Warnings();
                 Renewal();
+                Heartbeats();
                 OneUseKeys();
                 ReviewFixes();
                 KeyChanges();
@@ -486,6 +493,126 @@ namespace TallyDues.License.Tests
             Check("real renewal found", Run("renew-check", "--force", "--quiet") == ExitCodes.Ok);
             Check("alerts back after renewal", Run("check") == ExitCodes.Ok);
             Check("status shows new date", File.ReadAllText(Path.Combine(dir, "license-status.json")).Contains("30-Oct-2027"));
+        }
+
+        private static void Heartbeats()
+        {
+            string path, status;
+            int calls;
+
+            // About once a week, and a failed call is tried again the next day.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            status = Path.Combine(dir, "license-status.json");
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-01-01T10:00:00");
+            calls = portal.Calls;
+            Check("heartbeat: first call", Run("heartbeat") == ExitCodes.NoChange && portal.Calls == calls + 1);
+            Check("heartbeat: no call within a week", Run("heartbeat") == ExitCodes.NoChange && portal.Calls == calls + 1);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-01-07T09:00:00");
+            Check("heartbeat: still no call on day 6", Run("heartbeat") == ExitCodes.NoChange && portal.Calls == calls + 1);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-01-08T11:00:00");
+            portal.Mode = "drop";
+            Check("heartbeat: offline reported", Run("heartbeat") == ExitCodes.Network && portal.Calls == calls + 2);
+            Check("heartbeat: offline keeps alerts", Run("check") == ExitCodes.Ok);
+            portal.Mode = "ok";
+            Check("heartbeat: no retry the same day", Run("heartbeat") == ExitCodes.NoChange && portal.Calls == calls + 2);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-01-09T12:00:00");
+            Check("heartbeat: retry the next day", Run("heartbeat") == ExitCodes.NoChange && portal.Calls == calls + 3);
+
+            // A clock set back must not stop the calls for good.
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2026-12-01T12:00:00");
+            Check("heartbeat: a future stamp counts as old", Run("heartbeat") == ExitCodes.NoChange && portal.Calls == calls + 4);
+
+            // A renewal made before the end date comes in silently.
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-02-01T10:00:00");
+            portal.ValidUntil = "2028-04-30T10:00:00+00:00";
+            Check("heartbeat: early renewal found", Run("heartbeat") == ExitCodes.Ok);
+            Check("heartbeat: renewal shows new date", File.ReadAllText(status).Contains("30-Apr-2028") && Run("check") == ExitCodes.Ok);
+
+            // A signed release or revocation removes the license.
+            foreach (var withdrawn in new Dictionary<string, int> { { "released", ExitCodes.Released }, { "revoked", ExitCodes.Revoked } })
+            {
+                Install();
+                path = Path.Combine(dir, "license.dat");
+                status = Path.Combine(dir, "license-status.json");
+                portal.Result = withdrawn.Key;
+                Check("heartbeat: signed " + withdrawn.Key + " reported", Run("heartbeat") == withdrawn.Value);
+                portal.Result = null;
+                Check("heartbeat: " + withdrawn.Key + " removes the license", !File.Exists(path) && Run("check") == ExitCodes.NoLicense);
+                Check("heartbeat: " + withdrawn.Key + " shown in the footer", File.ReadAllText(status).Contains(withdrawn.Key == "released" ? "released on the portal" : "revoked"));
+                Check("heartbeat: " + withdrawn.Key + " explained to the user", File.ReadAllLines(outFile)[1].Contains(withdrawn.Key == "released" ? "released from this PC" : "no longer active"));
+                Check("heartbeat: " + withdrawn.Key + " then nothing to send", Run("heartbeat") == ExitCodes.NoLicense);
+                Check("heartbeat: " + withdrawn.Key + " key can activate again", Run("validate") == ExitCodes.Ok && Run("confirm") == ExitCodes.Ok && Run("check") == ExitCodes.Ok);
+                File.Delete(path);
+                Check("heartbeat: " + withdrawn.Key + " reason cleared by a new license", Run("check") == ExitCodes.NoLicense && File.ReadAllLines(outFile)[1].StartsWith("TallyDues has no valid license"));
+            }
+
+            // The renewal check after the end date honours a release too.
+            Install();
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", "2027-06-01T10:00:00");
+            portal.Result = "released";
+            Check("renew-check: signed release removes the license", Run("renew-check", "--force", "--quiet") == ExitCodes.Released && !File.Exists(Path.Combine(dir, "license.dat")));
+            portal.Result = null;
+
+            // Unsigned, forged or misplaced answers change nothing.
+            foreach (string error in new[] { "revoked", "expired", "invalid_key" })
+            {
+                Install();
+                portal.ErrorCode = error;
+                Run("heartbeat");
+                portal.ErrorCode = null;
+                Check("heartbeat: unsigned " + error + " keeps the license", Run("check") == ExitCodes.Ok);
+            }
+            foreach (string mode in new[] { "wrong-key", "wrong-nonce", "unsigned" })
+            {
+                Install();
+                portal.Mode = mode;
+                portal.Result = "released";
+                Check("heartbeat: " + mode + " release rejected", Run("heartbeat") == ExitCodes.BadResponse);
+                portal.Mode = "ok";
+                portal.Result = null;
+                Check("heartbeat: " + mode + " release keeps the license", Run("check") == ExitCodes.Ok);
+            }
+            Install();
+            portal.Result = "something";
+            Check("heartbeat: unknown result rejected", Run("heartbeat") == ExitCodes.BadResponse && Run("check") == ExitCodes.Ok);
+            Reset();
+            portal.Result = "released";
+            Check("validate: a signed release is not ok", Run("validate") == ExitCodes.BadResponse);
+            portal.Result = null;
+
+            // A new key that arrived during the call keeps its license.
+            Install();
+            path = Path.Combine(dir, "license.dat");
+            string first = File.ReadAllText(path);
+            string swapDir = dir;
+            File.WriteAllText(keyFile, "B1B2-C3D4-E5F6-0718-9A0B-1C2D-3E4F-5061");
+            Run("validate");
+            Run("confirm");
+            LicenseFile swapped = new LicenseStore(dir).Load();
+            File.WriteAllText(path, first);
+            string swappedText = null;
+            portal.OnHeartbeat = () =>
+            {
+                new LicenseStore(swapDir).Save(swapped);
+                swappedText = File.ReadAllText(Path.Combine(swapDir, "license.dat"));
+            };
+            portal.Result = "released";
+            Check("heartbeat: release backs off for a new key", Run("heartbeat") == ExitCodes.NoChange);
+            portal.Result = null;
+            portal.OnHeartbeat = null;
+            Check("heartbeat: new key's license stays", File.ReadAllText(path) == swappedText && Run("check") == ExitCodes.Ok);
+
+            // Changed records are left for Check to report, and never sealed again.
+            Install();
+            string statePath = Path.Combine(dir, "state.dat");
+            Run("check");
+            File.WriteAllText(statePath, File.ReadAllText(statePath).Replace("LASTSEEN=2", "LASTSEEN=1"));
+            calls = portal.Calls;
+            Check("heartbeat: changed records send nothing", Run("heartbeat") == ExitCodes.NoLicense && portal.Calls == calls);
+            Check("renew-check: changed records send nothing", Run("renew-check", "--force") == ExitCodes.NoLicense && portal.Calls == calls);
+            Check("heartbeat: changed records still refused", Run("check") == ExitCodes.NoLicense);
+            Environment.SetEnvironmentVariable("TD_TEST_NOW", null);
         }
 
         private static void OneUseKeys()
@@ -825,6 +952,8 @@ namespace TallyDues.License.Tests
             portal.ConfirmFailures = 0;
             portal.ConfirmError = null;
             portal.LoseNextConfirm = false;
+            portal.Result = null;
+            portal.OnHeartbeat = null;
             portal.ValidUntil = "2027-04-30T10:00:00+00:00";
             Environment.SetEnvironmentVariable("TD_TEST_MACHINE", "m1,m2,m3,m4");
             Environment.SetEnvironmentVariable("TD_TEST_NOW", null);

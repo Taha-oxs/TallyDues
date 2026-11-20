@@ -135,12 +135,22 @@ namespace TallyDues.License
         }
 
         // After the portal has freed the seat. The latest date seen goes too, like a new license.
-        public void RemoveLicense()
+        // A withdrawal from the portal ("released" or "revoked") is kept so that Check can say why.
+        public void RemoveLicense(string withdrawn = null)
         {
             File.Delete(LicensePath);
             RemovePending();
-            SaveState(new Dictionary<string, string>());
-            WriteStatus("No license on this PC");
+            var state = new Dictionary<string, string>();
+            if (withdrawn != null) state["WITHDRAWN"] = withdrawn;
+            SaveState(state);
+            WriteStatus(WithdrawnStatus(withdrawn));
+        }
+
+        public static string WithdrawnStatus(string withdrawn)
+        {
+            if (withdrawn == "released") return "License released on the portal";
+            if (withdrawn == "revoked") return "License revoked by OpenXpert Solutions";
+            return "No license on this PC";
         }
 
         public bool LicenseCanBeReplaced()

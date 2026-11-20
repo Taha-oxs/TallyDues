@@ -5,12 +5,12 @@ The portal owns all license decisions. This file records how TallyDues uses it. 
 ## Rules set by the owner
 
 - A license key is required for trial and paid use. Trial keys are generated on the portal.
-- Internet is needed at install. While a license is valid, TallyDues makes no network calls.
+- Internet is needed at install. While a license is valid, TallyDues calls `heartbeat` about once a week in the background (decided 2026-10-31). Being offline never stops alerts before the end date.
 - Plans are 6 and 12 months, with no cancellations or refunds. Paid plans have 14 grace days, included in `valid_until`. Trials have none.
 - After `valid_until`, alerts stop and a Renew and Cancel notice shows. The Dashboard and Settings stay open.
 - No offline activation codes in the first release.
 - **Each user has their own key, active on one PC at a time** (changed 2026-10-31; it replaces "activated once, then burned"). All companies on that PC are covered. One Windows account per PC.
-- **The customer releases from TallyDues**, not the website, because TallyDues makes no network calls while a license is valid and could not learn about a website release. A released key can be activated again, on this PC or another.
+- **The customer releases from TallyDues**, not the website. A website release reaches the PC only through the weekly heartbeat, and only once the portal signs a `released` answer (`docs\Portal-Team-Requests.md`, item 11). Until then the PC keeps working. A released key can be activated again, on this PC or another.
 - The owner wants released trial keys to stay unusable. TallyDues cannot enforce this: signed answers do not say whether a key is a trial, and the portal lets any released key activate again.
 - Renewal keeps the same key on the same PC and only moves the end date. `heartbeat` must keep answering for that PC.
 - A PC with no internet cannot release. The customer calls OpenXpert Solutions, which handles it on the portal.
@@ -24,7 +24,7 @@ All are `POST` under `/api/v1/tally`, sending `machine` (4 hashes), `nonce` and 
 |---|---|---|---|
 | `validate` | License Key page, Change License Key | `key` | `confirm_token`, `valid_until` |
 | `confirm` | After the keyfile is written; this call takes the seat | `confirm_token` | `valid_until`, `organisation` |
-| `heartbeat` | Only when looking for a renewal | `key` | `valid_until`, `organisation` |
+| `heartbeat` | About once a week while licensed, and when looking for a renewal | `key` | `valid_until`, `organisation`; or `result` `released` or `revoked` with `nonce` |
 | `release` | Release License, uninstall | `key` | `result`, `nonce` |
 
 Errors are unsigned: `{"error": "invalid_key|expired|revoked|subscription_suspended|key_used|limit_reached|rate_limited"}`. `key_used` and `limit_reached` both mean the key is active elsewhere. They can be shown to the user, but never change stored license state.
@@ -47,6 +47,7 @@ Errors are unsigned: `{"error": "invalid_key|expired|revoked|subscription_suspen
 | 40 | Renewal check found nothing new, or was skipped |
 | 41 to 43 | Key change only: same key, too many wrong keys, license set up from another Windows account (43 is also used by release) |
 | 44 | Release only: the license file could not be changed |
+| 45 | Heartbeat or renewal check: the portal signed `released`, so the license was removed (a signed `revoked` gives 22) |
 
 ## How a license is protected
 
@@ -84,7 +85,19 @@ Any failure at step 3 leaves the license working. If the answer is lost, the por
 
 Uninstalling warns first, with No as the default, then releases. If that fails, the user gets Retry, then a warning with No as the default: uninstalling anyway leaves the seat with this PC, and the customer calls OpenXpert Solutions to release it. Reinstalling on the same PC with the same key still works. A silent uninstall tries once and continues.
 
-A release on the website does not reach a PC, which keeps working until its end date. The website's Release button belongs to the portal and is not changed here.
+A release on the website reaches the PC only through the heartbeat below, and only once the portal signs a `released` answer. Until the portal ships that, the PC keeps working until its end date. The website's Release button belongs to the portal and is not changed here.
+
+## Heartbeat
+
+Each licensed alert run starts `TallyDuesLicense.exe heartbeat` in the background. It never delays or blocks the alert.
+
+1. Stop if there is no authentic license, or if `state.dat` was changed. Saving would seal changed records again, so they are left for Check to report.
+2. Stop if the last answered call (`LAST_BEAT`) was less than 7 days ago, or the last try (`BEAT_TRY`) less than a day ago. A time in the future counts as old, so a clock set back cannot stop the calls for good.
+3. Run the renewal check quietly. A signed, later `valid_until` is saved, as for a renewal.
+4. A signed `released` or `revoked` answer with the right nonce removes the license, as Release License does, and records why in `state.dat` (`WITHDRAWN`). Check then explains it, and the Dashboard footer shows it. A new key saved during the call keeps its license. A new license clears the reason.
+5. Unsigned errors, a network failure, a bad signature or nonce, or any other `result` change nothing. The next try is the next day.
+
+The portal still answers `ok` for a released machine, so step 4 waits on the portal (`docs\Portal-Team-Requests.md`, item 11).
 
 ## Changing the key
 
@@ -112,6 +125,6 @@ The scripts and the helper run on the customer's PC and can be patched. The aim 
 | `license.dat` | Signed answer, machine hashes, random value, encrypted key |
 | `license.pending` | Sealed keyfile, waiting for the portal's signed answer |
 | `seal.key` | Secret for the HMAC seal, protected for this PC |
-| `state.dat` | Latest date seen, warnings shown, last renewal try, seal |
+| `state.dat` | Latest date seen, warnings shown, last renewal try, last heartbeat and its last try, why the portal withdrew the license, seal |
 | `license-status.json` | License text for the Dashboard footer, and the signed organisation for its "Licensed to:" line |
 | `license-notice.txt` | Latest message from the gate, for the bridge's pop-up |

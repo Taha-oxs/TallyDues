@@ -37,12 +37,15 @@ namespace TallyDues.License
         public const int TooManyTries = 42;
         public const int OtherAccount = 43;
         public const int ReleaseUnfinished = 44;
+        public const int Released = 45;
     }
 
     internal static class Program
     {
         private const string RenewTask = "TallyDues-RenewCheck";
         private static readonly TimeSpan RetryGap = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan BeatGap = TimeSpan.FromDays(7);
+        private static readonly TimeSpan BeatRetryGap = TimeSpan.FromDays(1);
 
         private static int Main(string[] args)
         {
@@ -76,6 +79,7 @@ namespace TallyDues.License
                 case "confirm": return Confirm(options, dir);
                 case "check": return Check(options, dir);
                 case "renew-check": return RenewCheck(options, dir);
+                case "heartbeat": return Heartbeat(dir);
                 case "open-renewal": return OpenRenewal();
                 case "can-renew": return CanRenew(dir);
                 case "release": return LicenseRelease.Run(dir);
@@ -214,6 +218,7 @@ namespace TallyDues.License
                 state.Remove("LAST_TRY");
                 state.Remove("KEY_FAILS");
                 state.Remove("KEY_FAIL_AT");
+                state.Remove("WITHDRAWN");
                 store.SaveState(state);
                 store.WriteStatus("License valid until " + ShowDate(license.ValidUntil()), license.Licensee());
                 return null;
@@ -246,6 +251,20 @@ namespace TallyDues.License
         {
             warnLevel = "0";
             LicenseFile license = store.Load();
+            if (license == null)
+            {
+                // Only a signed portal answer writes WITHDRAWN, and the state seal must still match.
+                string withdrawn;
+                Dictionary<string, string> left = store.LoadState();
+                if (!store.StateTampered && left.TryGetValue("WITHDRAWN", out withdrawn) && (withdrawn == "released" || withdrawn == "revoked"))
+                {
+                    message = withdrawn == "released"
+                        ? "Your TallyDues license was released from this PC on the OpenXpert portal, so alerts have stopped. To use TallyDues here again, enter your license key with TallyDues Change License Key."
+                        : "Your TallyDues license key is no longer active, so alerts have stopped. Please contact OpenXpert Solutions.";
+                    store.WriteStatus(LicenseStore.WithdrawnStatus(withdrawn));
+                    return ExitCodes.NoLicense;
+                }
+            }
             if (license == null || !license.IsAuthentic())
             {
                 message = "TallyDues has no valid license on this PC. Enter your license key with TallyDues Change License Key. If that key is active on another PC, release it there first, or contact OpenXpert Solutions.";
@@ -324,26 +343,18 @@ namespace TallyDues.License
             LicenseFile license = store.Load();
             if (license == null || !license.IsAuthentic()) return ExitCodes.NoLicense;
             Dictionary<string, string> state = store.LoadState();
-            string last;
-            long ticks;
-            if (!options.ContainsKey("force") && state.TryGetValue("LAST_TRY", out last)
-                && long.TryParse(last, out ticks) && Now() - new DateTime(ticks) < RetryGap)
-            {
-                return ExitCodes.NoChange;
-            }
-            WithLock<object>(() =>
-            {
-                Dictionary<string, string> latest = store.LoadState();
-                latest["LAST_TRY"] = Now().Ticks.ToString(CultureInfo.InvariantCulture);
-                store.SaveState(latest);
-                return null;
-            });
+            // Saving would seal changed records again, so they are left for Check to report.
+            if (store.StateTampered) return ExitCodes.NoLicense;
+            if (!options.ContainsKey("force") && Recent(state, "LAST_TRY", RetryGap)) return ExitCodes.NoChange;
+            if (!Stamp(store, "LAST_TRY")) return ExitCodes.NoLicense;
 
             string key = LicenseStore.Unprotect(license.KeyProtected);
             string[] machine = Machine.Components();
             string random = NewRandom();
             string nonce = Machine.Nonce(machine, random);
-            SignedAnswer answer = Portal.Post("/api/v1/tally/heartbeat", Request("key", key, machine, nonce), nonce);
+            SignedAnswer answer = Portal.Post("/api/v1/tally/heartbeat", Request("key", key, machine, nonce), nonce, "ok", "released", "revoked");
+            string result = Portal.AsString(answer.Payload, "result");
+            if (result != "ok") return Withdraw(store, license, result == "revoked");
             var renewed = new LicenseFile
             {
                 KeyProtected = license.KeyProtected,
@@ -375,6 +386,68 @@ namespace TallyDues.License
             RemoveRenewTask();
             if (!options.ContainsKey("quiet")) ShowRenewed(dir, endText);
             return ExitCodes.Ok;
+        }
+
+        // A signed "released" or "revoked" answer: the seat is no longer this PC's, so the license goes,
+        // as after Release License. Unsigned errors never get here.
+        private static int Withdraw(LicenseStore store, LicenseFile license, bool revoked)
+        {
+            bool removed = WithLock(() =>
+            {
+                // A new key that arrived during the portal call keeps its license.
+                LicenseFile latest = store.Load();
+                if (latest == null || latest.KeyProtected != license.KeyProtected) return false;
+                store.RemoveLicense(revoked ? "revoked" : "released");
+                return true;
+            });
+            if (!removed) return ExitCodes.NoChange;
+            RemoveRenewTask();
+            return revoked ? ExitCodes.Revoked : ExitCodes.Released;
+        }
+
+        // Started in the background by each alert run, and calls the portal about once a week.
+        // It brings in renewals made early and a release or revocation on the portal.
+        // Being offline changes nothing: alerts keep working until the stored end date.
+        private static int Heartbeat(string dir)
+        {
+            var store = new LicenseStore(dir);
+            LicenseFile license = store.Load();
+            if (license == null || !license.IsAuthentic()) return ExitCodes.NoLicense;
+            Dictionary<string, string> state = store.LoadState();
+            if (store.StateTampered) return ExitCodes.NoLicense;
+            // After a failed call, the next try waits a day rather than a week.
+            if (Recent(state, "LAST_BEAT", BeatGap) || Recent(state, "BEAT_TRY", BeatRetryGap)) return ExitCodes.NoChange;
+            if (!Stamp(store, "BEAT_TRY")) return ExitCodes.NoLicense;
+
+            int result = RenewCheck(new Dictionary<string, string> { { "force", "" }, { "quiet", "" } }, dir);
+            if (result == ExitCodes.Ok || result == ExitCodes.NoChange) Stamp(store, "LAST_BEAT");
+            return result;
+        }
+
+        // True when the time stored under name is less than gap ago. A time in the future counts as old,
+        // so a clock set forward and then back cannot stop the calls for good.
+        private static bool Recent(Dictionary<string, string> state, string name, TimeSpan gap)
+        {
+            string text;
+            long ticks;
+            if (!state.TryGetValue(name, out text) || !long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out ticks)) return false;
+            if (ticks > DateTime.MaxValue.Ticks) return false;
+            TimeSpan age = Now() - new DateTime(ticks);
+            return age >= TimeSpan.Zero && age < gap;
+        }
+
+        // Saves the time now under name, unless the records were changed or the license has gone.
+        private static bool Stamp(LicenseStore store, string name)
+        {
+            return WithLock(() =>
+            {
+                if (store.Load() == null) return false;
+                Dictionary<string, string> latest = store.LoadState();
+                if (store.StateTampered) return false;
+                latest[name] = Now().Ticks.ToString(CultureInfo.InvariantCulture);
+                store.SaveState(latest);
+                return true;
+            });
         }
 
         // The address is fixed at build time and never taken from a link.

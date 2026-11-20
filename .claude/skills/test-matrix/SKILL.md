@@ -88,6 +88,7 @@ Give the user the shortest list of cases that covers the change, then record the
 - L18 Change with a wrong key, the same key, no internet and a used key: own message each, old license keeps working
 - L19 Change after the license has ended: alerts return. Five wrong keys: an hour's wait
 - L21 Edited `state.dat`, or deleted `seal.key`: alerts stop with a message
+- L26 Heartbeat: no portal call within a week of the last one (check `toast.log` and the portal's last seen). Offline: alerts keep working. Once the portal signs `released` (request item 11): release the machine on the website, set the PC clock 8 days ahead, run an alert; alerts stop with the released message and the footer says so; Change License Key brings them back
 - L20 Clipboard no longer holds the key after the window closes; text copied earlier that is not the key stays
 
 ## Run log

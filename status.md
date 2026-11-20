@@ -57,6 +57,13 @@ Update this file at the end of every chat. The task list is in `todo.md`.
 - Any build or Setup must use this key from now on: `Build-Release.ps1 -PublicKey yh1nl...`.
 - The newest portal drops `organisation` from `confirm` and `heartbeat`. The helper accepts that, so the Dashboard "Licensed to:" line will stay empty against the live portal.
 
+## Website release reaching the PC (2026-11-20)
+
+- Problem: a release on the portal website never reached the PC. The helper only called `heartbeat` after a license ended, and the portal's `heartbeat` answers a signed `ok` even for a released machine, because `findMachine` also returns released activations.
+- Portal: request item 11 in `docs\Portal-Team-Requests.md` asks for a signed `{"result":"released","nonce":...}` (and `revoked`) answer, plus a warning on the website Release button until then. Not yet sent to the portal team.
+- Helper: new `heartbeat` command, started in the background by `notify.ps1` after each licensed gate. It calls the portal at most once a week, or once a day after a failed call, and never blocks alerts. A signed `released` or `revoked` removes the license as Release License does, and Check and the Dashboard footer say why. Unsigned errors change nothing. `renew-check` and the heartbeat no longer re-seal a changed `state.dat`.
+- 280 helper tests pass. Uncommitted, not built into `TallyDues\TallyDuesLicense.exe`, not deployed and not tried in TallyPrime. Against the live portal it only brings in early renewals until item 11 ships.
+
 ## Next step
 
 Nothing until the owner lifts the hold. Then start with Phase 1 in `todo.md`.

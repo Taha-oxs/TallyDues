@@ -11,7 +11,7 @@ Be honest about the limit: the client can be patched. The design accepts this ri
 
 ## Fixed decisions
 
-- **Internet:** needed only at install and while looking for a renewal. A valid license makes no network calls, so there is no periodic heartbeat. `heartbeat` runs only after the user clicks Renew or once the license has ended.
+- **Internet:** needed at install. While licensed, each alert run starts a background `heartbeat` that calls the portal about once a week (owner's decision, 2026-10-31). It brings in early renewals and a signed `released` or `revoked`. Being offline never stops alerts before the end date.
 - **One place:** all license logic is in `TallyDuesLicense.exe`. Setup and `notify.ps1` use its exit codes. The TDL has no date logic and only displays `license-status.json`.
 - **One PC at a time:** each user has their own key. Customers release it from TallyDues or by uninstalling, then activate it again on this PC or another. Renewal keeps the key. A PC with no internet needs a call to OpenXpert Solutions.
 - **Trial:** a portal key like any other. There is no trial code in the client.
@@ -24,7 +24,8 @@ Be honest about the limit: the client can be patched. The design accepts this ri
 - **Install:** `validate` changes nothing. The sealed keyfile `license.pending` is written first, then `confirm` takes the seat, and alerts start only once the signed answer is stored. A failed install must not take a seat.
 - **Seal:** `license.dat` and `state.dat` carry an HMAC seal with a DPAPI machine-scope secret. It stops casual edits only. Never replace the encrypted key with an HMAC: the renewal check must send the key.
 - **Signatures:** verify every answer with the built-in Ed25519 public key and check the nonce. Verify the raw text of `payload`; never parse and rebuild it.
-- **Errors:** unsigned, so they may be shown but never change stored state.
+- **Errors:** unsigned, so they may be shown but never change stored state. Only a signed answer with the right nonce may remove a license (`released`, `revoked`).
+- **Tampered state:** never save `state.dat` when its seal fails, or the change would be sealed again.
 - **Machine:** only hashes leave the PC. The nonce binds a stored answer to the machine, using the portal's 3 of 4 rule.
 - **Failure:** a license failure must never crash or block TallyPrime. If the check cannot run, alerts stop with a message (fail closed).
 - **Secrets:** the Ed25519 private key and portal secrets never enter this repo. Only the public key ships, passed at build time.

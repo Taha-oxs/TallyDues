@@ -20,6 +20,7 @@ Production plan from the audit on 2026-10-31. **On hold: the owner asked to keep
 - [ ] Self-service trial keys, with no grace days. Today a trial would run for 29 days.
 - [ ] Card payments, renewal reminders and scheduled jobs, or launch with assisted sales. Turn on `LICENSE_ISSUE_ON_PAYMENT`, or an admin must generate every key.
 - [ ] Sign the machine in `confirm` and `heartbeat` answers (request item 7).
+- [ ] `heartbeat` must refuse a released machine with a signed `released` answer (request item 11). Until then a website release does not stop the PC.
 - [ ] Admin 2FA setup page, and an offline backup of the signing key.
 - [x] Live portal URL and Ed25519 public key: `https://slm.openxpert.cloud`, key `yh1nlWsvtqzDfkDIo4x8mHCXToB0BTLangrcyb0Sui4=` (2026-11-20). Pass both to every build.
 - [ ] The newest portal no longer sends `organisation` on `confirm` and `heartbeat`, so the Dashboard "Licensed to:" line stays empty. Ask the portal team to restore it (`docs\Portal-Team-Requests.md`).
@@ -46,7 +47,8 @@ Production plan from the audit on 2026-10-31. **On hold: the owner asked to keep
 
 ## Phase 3: Reliability
 
-- [ ] Background heartbeat in the helper.
+- [x] Background heartbeat in the helper (2026-11-20): weekly, started by each licensed alert run, 280 tests pass. Not yet deployed or tried in TallyPrime.
+- [ ] Deploy the heartbeat with `/deploy-test` and run test L26 in TallyPrime.
 - [ ] Move the alert engine into the signed C# helper, because `wscript` starting hidden PowerShell looks like malware to antivirus.
 - [ ] Clear helper message for an unpaid admin-issued key, which returns `subscription_suspended`.
 - [ ] Start Menu "Create support file": versions, exit codes and the `tally.ini` TDL line, no customer data.

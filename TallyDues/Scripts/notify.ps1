@@ -22,7 +22,9 @@
 #    network call. Fails closed: a missing helper or any error in the check
 #    counts as "not licensed". A blocked run shows a "TallyDues - License"
 #    notice instead of the alert, with a Renew button when renewing would help.
-#    An ended license also starts a background check for a renewal.
+#    An ended license also starts a background check for a renewal. A valid one
+#    starts the helper's background heartbeat, which calls the portal about once
+#    a week and changes nothing when the PC is offline.
 #  - -NoToast: run the gate only (used by the bridge for pop-up-only mode).
 #  Exit codes: 0 = licensed and shown (or -NoToast and licensed);
 #              2 = licensed, nothing could be shown;
@@ -249,6 +251,10 @@ if ($gateCode -ne 0) {
     if ($NoToast) { exit 4 }
     if (Show-Anything "TallyDues - License" $notice $noticeType) { exit 3 } else { exit 4 }
 }
+
+# Licensed: the helper calls the portal about once a week, in the background, to bring in an
+# early renewal or a release made on the website. It never delays or blocks this alert.
+try { Start-Process -FilePath $helper -ArgumentList ('heartbeat --install-dir "' + $ScriptRoot + '"') -WindowStyle Hidden } catch { Write-TDLog ("heartbeat could not start: " + $_) }
 
 $warned = ($warnLevel -ne "0")
 if ($warned -and -not $NoToast) { $null = Show-Anything "TallyDues - License" $notice "renew" }

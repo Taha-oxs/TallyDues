@@ -36,11 +36,17 @@ namespace TallyDues.License
 
         public static SignedAnswer Post(string endpoint, Dictionary<string, object> body, string expectedNonce)
         {
+            return Post(endpoint, body, expectedNonce, "ok");
+        }
+
+        // Only a signed answer may carry a result other than "ok", such as heartbeat's "released".
+        public static SignedAnswer Post(string endpoint, Dictionary<string, object> body, string expectedNonce, params string[] results)
+        {
             string json = new JavaScriptSerializer().Serialize(body);
             string text = Send(endpoint, json);
             SignedAnswer answer = Read(text);
             if (!IsTrusted(answer.PayloadRaw, answer.Signature)) throw new PortalException(ExitCodes.BadResponse);
-            if (AsString(answer.Payload, "result") != "ok") throw new PortalException(ExitCodes.BadResponse);
+            if (Array.IndexOf(results, AsString(answer.Payload, "result")) < 0) throw new PortalException(ExitCodes.BadResponse);
             if (AsString(answer.Payload, "nonce") != expectedNonce) throw new PortalException(ExitCodes.BadResponse);
             return answer;
         }
